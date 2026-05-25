@@ -757,7 +757,8 @@
   }
 
   h2 {
-    font-size: 16px;
+    font-size: 14px;
+    font-weight: 750;
     line-height: 1.2;
   }
 
@@ -783,6 +784,10 @@
   .processed-panel,
   .config-panel {
     padding: 16px;
+  }
+
+  .config-panel {
+    padding: 12px;
   }
 
   .picker {
@@ -857,12 +862,13 @@
 
   label span,
   legend {
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 750;
+    line-height: 1.2;
   }
 
   legend {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   input,
@@ -881,6 +887,12 @@
     background: var(--paper);
     color: var(--ink);
     outline: none;
+  }
+
+  .config-panel input,
+  .config-panel .precision-grid button,
+  .config-panel .mode-switch button {
+    min-height: 36px;
   }
 
   input {
@@ -905,6 +917,11 @@
   .tabs button {
     padding: 0 14px;
     font-weight: 750;
+  }
+
+  .config-panel .precision-grid button,
+  .config-panel .mode-switch button {
+    padding: 0 10px;
   }
 
   .picker > button:hover,
@@ -1005,30 +1022,32 @@
   }
 
   .config-grid {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 150px 92px 214px 250px 186px;
     align-items: flex-start;
-    gap: 18px 34px;
-  }
-
-  .config-grid > label {
-    flex: 0 1 128px;
-  }
-
-  .config-grid > label:first-child {
-    flex-basis: 150px;
-  }
-
-  .config-grid > fieldset {
-    flex: 0 1 auto;
+    gap: 18px 22px;
   }
 
   .precision-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
   }
 
   .mode-switch {
-    grid-template-columns: repeat(2, minmax(86px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  @media (max-width: 1040px) {
+    .config-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 640px) {
+    .config-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .tabs {
