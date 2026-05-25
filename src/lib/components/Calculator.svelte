@@ -1089,6 +1089,11 @@
     padding-top: 12px;
   }
 
+  .model-strip {
+    padding-right: 6px;
+    padding-bottom: 6px;
+  }
+
   .model-chip {
     display: flex;
     flex: 0 0 min(300px, 70vw);
