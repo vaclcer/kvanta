@@ -73,7 +73,8 @@
     }>;
   };
 
-  type GraphMode = "kv" | "total" | "runtime";
+  type GraphComponentId = "kv" | "weights" | "runtime";
+  type GraphComponents = Record<GraphComponentId, boolean>;
   type RuntimeOverheadId = "off" | "lean" | "typical" | "conservative";
 
   const processedModelsKey = "kvanta:processed-models";
@@ -91,7 +92,7 @@
   let batchSize = $state(1);
   let precision = $state<PrecisionId>("float16");
   let weightPrecision = $state<PrecisionId>("float16");
-  let graphMode = $state<GraphMode>("total");
+  let graphComponents = $state<GraphComponents>({ kv: true, weights: true, runtime: false });
   let runtimeOverhead = $state<RuntimeOverheadId>("off");
   let activeTab = $state<"graph" | "architecture">("graph");
   let pickerError = $state<string | null>(null);
@@ -112,29 +113,64 @@
   const tooltipWidth = $derived(Math.min(390, Math.max(250, 190 + hoveredGraphItemsMaxLength(hoveredGraph) * 8)));
 
   function graphBytes(kvBytes: number, weightBytes: number): number {
-    const baseBytes = kvBytes + weightBytes;
+    let bytes = 0;
 
-    if (graphMode === "kv") {
-      return kvBytes;
+    if (graphComponents.kv) {
+      bytes += kvBytes;
     }
 
-    if (graphMode === "runtime") {
-      return baseBytes + runtimeOverheadBytes(kvBytes, weightBytes);
+    if (graphComponents.weights) {
+      bytes += weightBytes;
     }
 
-    return baseBytes;
+    if (graphComponents.runtime) {
+      bytes += runtimeOverheadBytes(kvBytes, weightBytes);
+    }
+
+    return bytes;
   }
 
   function runtimeOverheadBytes(kvBytes: number, weightBytes: number): number {
     return (kvBytes + weightBytes) * selectedRuntimeOverhead.percent;
   }
 
-  function graphModeLabel(): string {
-    if (graphMode === "kv") {
-      return "kv cache";
+  function toggleGraphComponent(component: GraphComponentId) {
+    const activeCount = Number(graphComponents.kv) + Number(graphComponents.weights) + Number(graphComponents.runtime);
+
+    if (graphComponents[component] && activeCount === 1) {
+      return;
     }
 
-    return graphMode === "runtime" ? "runtime total" : "kv + weights";
+    graphComponents = { ...graphComponents, [component]: !graphComponents[component] };
+  }
+
+  function graphModeLabel(): string {
+    const labels = [
+      graphComponents.kv ? "kv" : "",
+      graphComponents.weights ? "weights" : "",
+      graphComponents.runtime ? "runtime" : "",
+    ].filter(Boolean);
+
+    return labels.join(" + ");
+  }
+
+  function graphPointTitle(seriesId: string, point: GraphPoint): string {
+    const parts = [`${seriesId}: ${formatBytes(point.bytes, "gib")} shown`];
+
+    if (graphComponents.kv) {
+      parts.push(`${formatBytes(point.kvBytes, "gib")} KV`);
+    }
+
+    if (graphComponents.weights) {
+      parts.push(`${formatBytes(point.weightBytes, "gib")} weights`);
+    }
+
+    if (graphComponents.runtime) {
+      parts.push(`${formatBytes(point.overheadBytes, "gib")} runtime`);
+    }
+
+    parts.push(`at ${formatInteger(point.context)} tokens`);
+    return parts.join(", ");
   }
 
   function hoveredGraphItemsMaxLength(graph: HoveredGraph | null): number {
@@ -572,20 +608,21 @@
 
     <section class="config-panel">
       <div class="config-grid">
-        <label>
-          <span>Context Size</span>
-          <input min="1" step="1024" type="number" bind:value={sequenceLength} />
+        <label title="Maximum token context to evaluate on the graph.">
+          <span title="Maximum token context to evaluate on the graph.">Context Size</span>
+          <input min="1" step="1024" title="Maximum token context to evaluate on the graph." type="number" bind:value={sequenceLength} />
         </label>
-        <label>
-          <span>Batches</span>
-          <input min="1" type="number" bind:value={batchSize} />
+        <label title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">
+          <span title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">Batches</span>
+          <input min="1" title="Batch count multiplies KV cache memory because each sequence keeps its own cache." type="number" bind:value={batchSize} />
         </label>
         <div class="field">
-          <span>KV bits</span>
+          <span title="Precision used for KV cache tensors.">KV bits</span>
           <div class="precision-grid">
             {#each kvPrecisionOptions as option}
               <button
                 class:active={precision === option.id}
+                title={`Use ${option.label}-bit precision for KV cache tensors.`}
                 type="button"
                 onclick={() => {
                   precision = option.id;
@@ -597,11 +634,12 @@
           </div>
         </div>
         <div class="field">
-          <span>Weights bits</span>
+          <span title="Quantization or precision used to estimate model-weight memory.">Weights bits</span>
           <div class="precision-grid">
             {#each weightPrecisionOptions as option}
               <button
                 class:active={weightPrecision === option.id}
+                title={`Estimate model weights at ${option.label}-bit precision.`}
                 type="button"
                 onclick={() => {
                   weightPrecision = option.id;
@@ -613,19 +651,20 @@
           </div>
         </div>
         <div class="field">
-          <span>Graph</span>
+          <span title="Choose which memory components are summed into the graph line.">Graph</span>
           <div class="mode-switch">
-            <button class:active={graphMode === "kv"} type="button" onclick={() => (graphMode = "kv")}>KV only</button>
-            <button class:active={graphMode === "total"} type="button" onclick={() => (graphMode = "total")}>KV + weights</button>
-            <button class:active={graphMode === "runtime"} type="button" onclick={() => (graphMode = "runtime")}>Runtime total</button>
+            <button class:active={graphComponents.kv} title="Include KV cache memory in the graph." type="button" onclick={() => toggleGraphComponent("kv")}>KV</button>
+            <button class:active={graphComponents.weights} title="Include estimated model-weight memory in the graph." type="button" onclick={() => toggleGraphComponent("weights")}>Weights</button>
+            <button class:active={graphComponents.runtime} title="Include the selected runtime overhead estimate in the graph." type="button" onclick={() => toggleGraphComponent("runtime")}>Runtime</button>
           </div>
         </div>
         <div class="field">
-          <span>Overhead</span>
+          <span title="Optional inference runtime overhead applied as a percentage of KV plus weights.">Overhead</span>
           <div class="overhead-grid">
             {#each runtimeOverheadOptions as option}
               <button
                 class:active={runtimeOverhead === option.id}
+                title={option.percent === 0 ? "Do not add runtime overhead." : `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`}
                 type="button"
                 onclick={() => {
                   runtimeOverhead = option.id;
@@ -660,7 +699,7 @@
                 class="graph"
                 viewBox="0 0 800 340"
                 role="img"
-                aria-label={graphMode === "kv" ? "KV cache growth by context size" : "Total VRAM footprint growth by context size"}
+                aria-label={`Memory growth by context size: ${graphModeLabel()}`}
               >
                 {#each graphScale.yTicks as tick}
                   <line class="grid" x1="48" x2="760" y1={pointToY(tick)} y2={pointToY(tick)} />
@@ -677,7 +716,7 @@
                   <path d={linePath(series.points)} stroke={series.color} />
                   {#each series.points as point}
                     <circle cx={pointToX(point.context)} cy={pointToY(point.bytes)} r="3" fill={series.color}>
-                      <title>{series.id}: {formatBytes(point.bytes, "gib")} shown, {formatBytes(point.kvBytes, "gib")} KV, {formatBytes(point.weightBytes, "gib")} weights{graphMode === "runtime" ? `, ${formatBytes(point.overheadBytes, "gib")} overhead` : ""} at {formatInteger(point.context)} tokens</title>
+                      <title>{graphPointTitle(series.id, point)}</title>
                     </circle>
                   {/each}
                 {/each}
@@ -701,10 +740,14 @@
                     <div class="tooltip-item">
                       <strong><i style={`background:${item.color}`}></i>{compactName(item.id)}</strong>
                       <span>shown {formatBytes(item.bytes, "gib")}</span>
-                      <span>kv {formatBytes(item.kvBytes, "gib")}</span>
-                      <span>weights {formatBytes(item.weightBytes, "gib")}</span>
-                      {#if graphMode === "runtime"}
-                        <span>overhead {formatBytes(item.overheadBytes, "gib")}</span>
+                      {#if graphComponents.kv}
+                        <span>kv {formatBytes(item.kvBytes, "gib")}</span>
+                      {/if}
+                      {#if graphComponents.weights}
+                        <span>weights {formatBytes(item.weightBytes, "gib")}</span>
+                      {/if}
+                      {#if graphComponents.runtime}
+                        <span>runtime {formatBytes(item.overheadBytes, "gib")}</span>
                       {/if}
                     </div>
                   {/each}
@@ -758,6 +801,8 @@
       created by <a href="https://www.linkedin.com/in/vcerny/" target="_blank" rel="noreferrer">Vaclav Cerny</a>
       <span>/</span>
       <a href="https://github.com/vaclcer/kvanta" target="_blank" rel="noreferrer">GitHub</a>
+      <span>/</span>
+      <a href="https://x.com/vacla_vcerny" target="_blank" rel="noreferrer">X</a>
     </footer>
   </div>
 </main>
