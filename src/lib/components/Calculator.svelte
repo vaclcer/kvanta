@@ -15,6 +15,20 @@
     error?: string;
   };
 
+  type ModelSearchResult = {
+    id: string;
+    pipelineTag?: string;
+    downloads?: number;
+    likes?: number;
+    gated?: boolean | "auto" | "manual";
+    tags: string[];
+  };
+
+  type ModelSearchResponse = {
+    results?: ModelSearchResult[];
+    error?: string;
+  };
+
   type ProcessedModel = {
     id: string;
     selected: boolean;
@@ -70,7 +84,12 @@
   let graphMode = $state<GraphMode>("total");
   let activeTab = $state<"graph" | "architecture">("graph");
   let pickerError = $state<string | null>(null);
+  let modelSearchResults = $state<ModelSearchResult[]>([]);
+  let modelSearchLoading = $state(false);
+  let modelSearchError = $state<string | null>(null);
   let hoveredGraph = $state<HoveredGraph | null>(null);
+  let modelSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let modelSearchRequestId = 0;
 
   const selectedModels = $derived(processedModels.filter((model) => model.selected && model.result));
   const graphSeries = $derived(buildGraphSeries(selectedModels));
@@ -121,6 +140,74 @@
     return Boolean(owner && repo && rest.length === 0);
   }
 
+  function shouldSearchModels(value: string): boolean {
+    const trimmed = value.trim();
+    return trimmed.length >= 2 && !trimmed.includes("huggingface.co") && !trimmed.startsWith("http");
+  }
+
+  function searchResultMeta(result: ModelSearchResult): string {
+    const parts = [result.pipelineTag, result.downloads !== undefined ? `${formatInteger(result.downloads)} downloads` : undefined];
+
+    if (result.gated) {
+      parts.push("gated");
+    }
+
+    return parts.filter(Boolean).join(" / ");
+  }
+
+  function handleModelInput(value: string) {
+    modelInput = value;
+    pickerError = null;
+    modelSearchError = null;
+
+    if (modelSearchTimer) {
+      clearTimeout(modelSearchTimer);
+    }
+
+    if (!shouldSearchModels(value)) {
+      modelSearchResults = [];
+      modelSearchLoading = false;
+      modelSearchRequestId += 1;
+      return;
+    }
+
+    modelSearchLoading = true;
+    const requestId = modelSearchRequestId + 1;
+    modelSearchRequestId = requestId;
+    modelSearchTimer = setTimeout(() => {
+      void searchModels(value, requestId);
+    }, 250);
+  }
+
+  async function searchModels(query: string, requestId: number) {
+    try {
+      const response = await fetch(`/api/model-search?q=${encodeURIComponent(query.trim())}`);
+      const data = (await response.json()) as ModelSearchResponse;
+
+      if (requestId !== modelSearchRequestId) {
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Model search failed.");
+      }
+
+      modelSearchResults = data.results ?? [];
+      modelSearchError = null;
+    } catch (caught) {
+      if (requestId !== modelSearchRequestId) {
+        return;
+      }
+
+      modelSearchResults = [];
+      modelSearchError = caught instanceof Error ? caught.message : "Model search failed.";
+    } finally {
+      if (requestId === modelSearchRequestId) {
+        modelSearchLoading = false;
+      }
+    }
+  }
+
   function storagePayload() {
     return processedModels.map((model) => ({ id: model.id, selected: model.selected }));
   }
@@ -158,7 +245,14 @@
 
   async function addModel() {
     const modelId = parseHuggingFaceInput(modelInput);
+
+    await addModelById(modelId);
+  }
+
+  async function addModelById(modelId: string) {
     pickerError = null;
+    modelSearchResults = [];
+    modelSearchError = null;
 
     if (!isValidModelId(modelId)) {
       pickerError = "Paste a Hugging Face URL or enter an ID like owner/model-name.";
@@ -180,6 +274,11 @@
     saveProcessedModels();
     modelInput = "";
     await calculateModel(modelId);
+  }
+
+  async function addSearchResult(modelId: string) {
+    modelInput = modelId;
+    await addModelById(modelId);
   }
 
   async function calculateModel(modelId: string) {
@@ -367,13 +466,32 @@
         <label>
           <span>Hugging Face model</span>
           <input
-            bind:value={modelInput}
-            placeholder="https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro"
+            value={modelInput}
+            oninput={(event) => handleModelInput((event.currentTarget as HTMLInputElement).value)}
+            placeholder="Search Qwen, Llama, DeepSeek or paste a Hugging Face URL"
             spellcheck="false"
           />
         </label>
         <button type="submit">Add</button>
       </form>
+      {#if modelSearchLoading || modelSearchResults.length > 0 || modelSearchError}
+        <div class="model-search" aria-live="polite">
+          {#if modelSearchLoading}
+            <p>Searching Hugging Face models...</p>
+          {:else if modelSearchError}
+            <p>{modelSearchError}</p>
+          {:else if modelSearchResults.length === 0}
+            <p>No LLM/VLM models found.</p>
+          {:else}
+            {#each modelSearchResults as result}
+              <button type="button" onclick={() => void addSearchResult(result.id)}>
+                <strong>{result.id}</strong>
+                <span>{searchResultMeta(result)}</span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
       {#if pickerError}
         <div class="error slim">{pickerError}</div>
       {/if}
@@ -665,6 +783,59 @@
   .picker {
     display: grid;
     gap: 12px;
+  }
+
+  .model-search {
+    display: grid;
+    max-height: 312px;
+    margin-top: 12px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    background: var(--paper);
+  }
+
+  .model-search p {
+    padding: 11px 12px;
+    color: rgb(17 17 17 / 55%);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .model-search button {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    padding: 10px 12px;
+    color: var(--ink);
+    text-align: left;
+  }
+
+  .model-search button:last-child {
+    border-bottom: 0;
+  }
+
+  .model-search button:hover {
+    background: var(--ink);
+    color: white;
+  }
+
+  .model-search strong,
+  .model-search span {
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .model-search span {
+    color: rgb(17 17 17 / 55%);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px;
+  }
+
+  .model-search button:hover span {
+    color: rgb(255 255 255 / 68%);
   }
 
   label,

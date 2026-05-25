@@ -12,6 +12,11 @@ type ModelInfoCacheEntry = {
   value: HuggingFaceModelInfo;
 };
 
+type ModelSearchCacheEntry = {
+  expiresAt: number;
+  value: HuggingFaceModelSearchResult[];
+};
+
 export type HuggingFaceModelInfo = {
   safetensors?: {
     total?: number;
@@ -19,9 +24,30 @@ export type HuggingFaceModelInfo = {
   };
 };
 
+export type HuggingFaceModelSearchResult = {
+  id: string;
+  pipelineTag?: string;
+  downloads?: number;
+  likes?: number;
+  gated?: boolean | "auto" | "manual";
+  tags: string[];
+};
+
+type RawHuggingFaceModelSearchResult = {
+  id?: unknown;
+  pipeline_tag?: unknown;
+  downloads?: unknown;
+  likes?: unknown;
+  gated?: unknown;
+  tags?: unknown;
+};
+
 const configCache = new Map<string, CacheEntry>();
 const modelInfoCache = new Map<string, ModelInfoCacheEntry>();
+const modelSearchCache = new Map<string, ModelSearchCacheEntry>();
 const cacheTtlMs = 1000 * 60 * 10;
+const searchCacheTtlMs = 1000 * 60 * 3;
+const modelSearchPipelineTags = ["text-generation", "text2text-generation", "image-text-to-text"];
 
 function encodeModelId(modelId: string): string {
   return modelId
@@ -106,4 +132,81 @@ export async function fetchModelInfo(modelId: string): Promise<HuggingFaceModelI
   modelInfoCache.set(trimmedModelId, { expiresAt: Date.now() + cacheTtlMs, value: info });
 
   return info;
+}
+
+function normalizeSearchResult(result: RawHuggingFaceModelSearchResult): HuggingFaceModelSearchResult | null {
+  if (typeof result.id !== "string") {
+    return null;
+  }
+
+  return {
+    id: result.id,
+    pipelineTag: typeof result.pipeline_tag === "string" ? result.pipeline_tag : undefined,
+    downloads: typeof result.downloads === "number" ? result.downloads : undefined,
+    likes: typeof result.likes === "number" ? result.likes : undefined,
+    gated:
+      typeof result.gated === "boolean" || result.gated === "auto" || result.gated === "manual"
+        ? result.gated
+        : undefined,
+    tags: Array.isArray(result.tags) ? result.tags.filter((tag): tag is string => typeof tag === "string") : [],
+  };
+}
+
+export async function searchHuggingFaceModels(query: string): Promise<HuggingFaceModelSearchResult[]> {
+  const trimmedQuery = query.trim();
+
+  if (trimmedQuery.length < 2) {
+    return [];
+  }
+
+  const cacheKey = trimmedQuery.toLowerCase();
+  const cached = modelSearchCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  const headers: HeadersInit = {};
+
+  if (process.env.HUGGINGFACE_TOKEN) {
+    headers.Authorization = `Bearer ${process.env.HUGGINGFACE_TOKEN}`;
+  }
+
+  const responses = await Promise.all(
+    modelSearchPipelineTags.map(async (pipelineTag) => {
+      const searchParams = new URLSearchParams({
+        search: trimmedQuery,
+        pipeline_tag: pipelineTag,
+        sort: "downloads",
+        direction: "-1",
+        limit: "8",
+        full: "false",
+      });
+      const response = await fetch(`${HF_BASE_URL}/api/models?${searchParams.toString()}`, { headers });
+
+      if (!response.ok) {
+        throw new Error(`Hugging Face model search failed with status ${response.status}.`);
+      }
+
+      return (await response.json()) as RawHuggingFaceModelSearchResult[];
+    }),
+  );
+
+  const resultsById = new Map<string, HuggingFaceModelSearchResult>();
+
+  for (const result of responses.flat()) {
+    const normalized = normalizeSearchResult(result);
+
+    if (normalized) {
+      resultsById.set(normalized.id, normalized);
+    }
+  }
+
+  const results = [...resultsById.values()]
+    .sort((left, right) => (right.downloads ?? 0) - (left.downloads ?? 0))
+    .slice(0, 12);
+
+  modelSearchCache.set(cacheKey, { expiresAt: Date.now() + searchCacheTtlMs, value: results });
+
+  return results;
 }
