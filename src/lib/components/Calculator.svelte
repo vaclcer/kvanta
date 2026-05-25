@@ -1023,10 +1023,10 @@
   }
 
   .config-grid {
-    display: grid;
-    grid-template-columns: 184px 112px 166px 198px 176px;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 10px 22px;
   }
 
   .config-grid > label,
@@ -1044,39 +1044,36 @@
   }
 
   .config-grid label input {
-    flex: 1;
     padding: 0 8px;
     font-size: 13px;
   }
 
   .config-grid > label:first-child input {
-    max-width: 86px;
+    width: 96px;
   }
 
   .config-grid > label:nth-child(2) input {
-    max-width: 42px;
+    width: 52px;
   }
 
   .precision-grid {
-    grid-template-columns: repeat(3, 34px);
+    display: flex;
     gap: 6px;
+  }
+
+  .precision-grid button {
+    width: 34px;
+    padding: 0;
   }
 
   .mode-switch {
-    grid-template-columns: 58px 86px;
+    display: flex;
     gap: 6px;
   }
 
-  @media (max-width: 1120px) {
-    .config-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  @media (max-width: 640px) {
-    .config-grid {
-      grid-template-columns: 1fr;
-    }
+  .config-panel .mode-switch button {
+    padding: 0 10px;
+    white-space: nowrap;
   }
 
   .tabs {
