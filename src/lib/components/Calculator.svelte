@@ -556,6 +556,8 @@
 
     <footer class="footer">
       created by <a href="https://github.com/vaclcer" target="_blank" rel="noreferrer">Vaclav Cerny</a>
+      <span>/</span>
+      <a href="https://github.com/vaclcer/kvanta" target="_blank" rel="noreferrer">GitHub</a>
     </footer>
   </div>
 </main>
