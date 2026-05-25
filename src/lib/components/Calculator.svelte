@@ -42,6 +42,7 @@
     context: number;
     kvBytes: number;
     weightBytes: number;
+    overheadBytes: number;
     bytes: number;
   };
 
@@ -66,15 +67,23 @@
       color: string;
       kvBytes: number;
       weightBytes: number;
+      overheadBytes: number;
       bytes: number;
       y: number;
     }>;
   };
 
-  type GraphMode = "kv" | "total";
+  type GraphMode = "kv" | "total" | "runtime";
+  type RuntimeOverheadId = "off" | "lean" | "typical" | "conservative";
 
   const processedModelsKey = "kvanta:processed-models";
   const palette = ["#111111", "#2f6df6", "#d45f00", "#15803d", "#7c3aed", "#be123c"];
+  const runtimeOverheadOptions: Array<{ id: RuntimeOverheadId; label: string; percent: number }> = [
+    { id: "off", label: "Off", percent: 0 },
+    { id: "lean", label: "+5", percent: 0.05 },
+    { id: "typical", label: "+10", percent: 0.1 },
+    { id: "conservative", label: "+20", percent: 0.2 },
+  ];
 
   let modelInput = $state("");
   let processedModels = $state<ProcessedModel[]>([]);
@@ -83,6 +92,7 @@
   let precision = $state<PrecisionId>("float16");
   let weightPrecision = $state<PrecisionId>("float16");
   let graphMode = $state<GraphMode>("total");
+  let runtimeOverhead = $state<RuntimeOverheadId>("off");
   let activeTab = $state<"graph" | "architecture">("graph");
   let pickerError = $state<string | null>(null);
   let modelSearchResults = $state<ModelSearchResult[]>([]);
@@ -93,13 +103,38 @@
   let modelSearchRequestId = 0;
 
   const selectedModels = $derived(processedModels.filter((model) => model.selected && model.result));
+  const selectedRuntimeOverhead = $derived(
+    runtimeOverheadOptions.find((option) => option.id === runtimeOverhead) ?? runtimeOverheadOptions[0],
+  );
   const graphSeries = $derived(buildGraphSeries(selectedModels));
   const graphMaxContext = $derived(Math.max(1, sequenceLength));
   const graphScale = $derived(buildGraphScale(graphSeries));
   const tooltipWidth = $derived(Math.min(390, Math.max(250, 190 + hoveredGraphItemsMaxLength(hoveredGraph) * 8)));
 
   function graphBytes(kvBytes: number, weightBytes: number): number {
-    return graphMode === "kv" ? kvBytes : kvBytes + weightBytes;
+    const baseBytes = kvBytes + weightBytes;
+
+    if (graphMode === "kv") {
+      return kvBytes;
+    }
+
+    if (graphMode === "runtime") {
+      return baseBytes + runtimeOverheadBytes(kvBytes, weightBytes);
+    }
+
+    return baseBytes;
+  }
+
+  function runtimeOverheadBytes(kvBytes: number, weightBytes: number): number {
+    return (kvBytes + weightBytes) * selectedRuntimeOverhead.percent;
+  }
+
+  function graphModeLabel(): string {
+    if (graphMode === "kv") {
+      return "kv cache";
+    }
+
+    return graphMode === "runtime" ? "runtime total" : "kv + weights";
   }
 
   function hoveredGraphItemsMaxLength(graph: HoveredGraph | null): number {
@@ -386,11 +421,13 @@
         points: contextStops(sequenceLength).map((context) => {
           const kvBytes = calculateKvAtContext(model.result, context);
           const weightBytes = weightBytesFor(model.result);
+          const overheadBytes = runtimeOverheadBytes(kvBytes, weightBytes);
 
           return {
             context,
             kvBytes,
             weightBytes,
+            overheadBytes,
             bytes: graphBytes(kvBytes, weightBytes),
           };
         }),
@@ -415,6 +452,7 @@
       .map((model, index) => {
         const kvBytes = calculateKvAtContext(model.result, context);
         const weightBytes = weightBytesFor(model.result);
+        const overheadBytes = runtimeOverheadBytes(kvBytes, weightBytes);
         const bytes = graphBytes(kvBytes, weightBytes);
 
         return {
@@ -422,6 +460,7 @@
           color: palette[index % palette.length],
           kvBytes,
           weightBytes,
+          overheadBytes,
           bytes,
           y: pointToY(bytes),
         };
@@ -578,6 +617,23 @@
           <div class="mode-switch">
             <button class:active={graphMode === "kv"} type="button" onclick={() => (graphMode = "kv")}>KV only</button>
             <button class:active={graphMode === "total"} type="button" onclick={() => (graphMode = "total")}>KV + weights</button>
+            <button class:active={graphMode === "runtime"} type="button" onclick={() => (graphMode = "runtime")}>Runtime total</button>
+          </div>
+        </div>
+        <div class="field">
+          <span>Overhead</span>
+          <div class="overhead-grid">
+            {#each runtimeOverheadOptions as option}
+              <button
+                class:active={runtimeOverhead === option.id}
+                type="button"
+                onclick={() => {
+                  runtimeOverhead = option.id;
+                }}
+              >
+                {option.label}
+              </button>
+            {/each}
           </div>
         </div>
       </div>
@@ -616,12 +672,12 @@
                 {/each}
                 <line x1="48" x2="760" y1="300" y2="300" />
                 <line x1="48" x2="48" y1="38" y2="300" />
-                <text x="648" y="34">{graphMode === "kv" ? "kv cache" : "kv + weights"}</text>
+                <text x="648" y="34">{graphModeLabel()}</text>
                 {#each graphSeries as series}
                   <path d={linePath(series.points)} stroke={series.color} />
                   {#each series.points as point}
                     <circle cx={pointToX(point.context)} cy={pointToY(point.bytes)} r="3" fill={series.color}>
-                      <title>{series.id}: {formatBytes(point.bytes, "gib")} shown, {formatBytes(point.kvBytes, "gib")} KV, {formatBytes(point.weightBytes, "gib")} weights at {formatInteger(point.context)} tokens</title>
+                      <title>{series.id}: {formatBytes(point.bytes, "gib")} shown, {formatBytes(point.kvBytes, "gib")} KV, {formatBytes(point.weightBytes, "gib")} weights{graphMode === "runtime" ? `, ${formatBytes(point.overheadBytes, "gib")} overhead` : ""} at {formatInteger(point.context)} tokens</title>
                     </circle>
                   {/each}
                 {/each}
@@ -647,6 +703,9 @@
                       <span>shown {formatBytes(item.bytes, "gib")}</span>
                       <span>kv {formatBytes(item.kvBytes, "gib")}</span>
                       <span>weights {formatBytes(item.weightBytes, "gib")}</span>
+                      {#if graphMode === "runtime"}
+                        <span>overhead {formatBytes(item.overheadBytes, "gib")}</span>
+                      {/if}
                     </div>
                   {/each}
                 </div>
@@ -886,6 +945,7 @@
   input,
   .picker > button,
   .precision-grid button,
+  .overhead-grid button,
   .mode-switch button,
   .tabs button {
     min-height: 44px;
@@ -897,6 +957,7 @@
 
   .config-panel input,
   .config-panel .precision-grid button,
+  .config-panel .overhead-grid button,
   .config-panel .mode-switch button {
     min-height: 30px;
   }
@@ -919,6 +980,7 @@
 
   .picker > button,
   .precision-grid button,
+  .overhead-grid button,
   .mode-switch button,
   .tabs button {
     padding: 0 14px;
@@ -926,6 +988,7 @@
   }
 
   .config-panel .precision-grid button,
+  .config-panel .overhead-grid button,
   .config-panel .mode-switch button {
     padding: 0 8px;
     font-size: 13px;
@@ -934,6 +997,8 @@
   .picker > button:hover,
   .precision-grid button:hover,
   .precision-grid button.active,
+  .overhead-grid button:hover,
+  .overhead-grid button.active,
   .mode-switch button:hover,
   .mode-switch button.active,
   .tabs button:hover,
@@ -1022,6 +1087,7 @@
   }
 
   .precision-grid,
+  .overhead-grid,
   .mode-switch,
   .info-grid {
     display: grid;
@@ -1061,6 +1127,7 @@
   }
 
   .config-grid .precision-grid,
+  .config-grid .overhead-grid,
   .config-grid .mode-switch {
     grid-row: 2;
   }
@@ -1078,8 +1145,18 @@
     gap: 6px;
   }
 
+  .overhead-grid {
+    display: flex;
+    gap: 6px;
+  }
+
   .precision-grid button {
     width: 34px;
+    padding: 0;
+  }
+
+  .overhead-grid button {
+    width: 42px;
     padding: 0;
   }
 
