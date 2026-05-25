@@ -75,12 +75,11 @@
 
   type GraphComponentId = "kv" | "weights" | "runtime";
   type GraphComponents = Record<GraphComponentId, boolean>;
-  type RuntimeOverheadId = "off" | "lean" | "typical" | "conservative";
+  type RuntimeOverheadId = "lean" | "typical" | "conservative";
 
   const processedModelsKey = "kvanta:processed-models";
   const palette = ["#111111", "#2f6df6", "#d45f00", "#15803d", "#7c3aed", "#be123c"];
   const runtimeOverheadOptions: Array<{ id: RuntimeOverheadId; label: string; percent: number }> = [
-    { id: "off", label: "Off", percent: 0 },
     { id: "lean", label: "+5", percent: 0.05 },
     { id: "typical", label: "+10", percent: 0.1 },
     { id: "conservative", label: "+20", percent: 0.2 },
@@ -93,7 +92,7 @@
   let precision = $state<PrecisionId>("float16");
   let weightPrecision = $state<PrecisionId>("float16");
   let graphComponents = $state<GraphComponents>({ kv: true, weights: true, runtime: false });
-  let runtimeOverhead = $state<RuntimeOverheadId>("off");
+  let runtimeOverhead = $state<RuntimeOverheadId>("lean");
   let activeTab = $state<"graph" | "architecture">("graph");
   let pickerError = $state<string | null>(null);
   let modelSearchResults = $state<ModelSearchResult[]>([]);
@@ -666,9 +665,7 @@
                 class:active={runtimeOverhead === option.id}
                 disabled={!graphComponents.runtime}
                 title={graphComponents.runtime
-                  ? option.percent === 0
-                    ? "Do not add runtime overhead."
-                    : `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`
+                  ? `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`
                   : "Enable Runtime in Graph to use overhead presets."}
                 type="button"
                 onclick={() => {
