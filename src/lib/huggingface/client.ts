@@ -18,6 +18,13 @@ type ModelSearchCacheEntry = {
 };
 
 export type HuggingFaceModelInfo = {
+  tags?: string[];
+  cardData?: {
+    base_model?: string | string[];
+  };
+  gguf?: {
+    total?: number;
+  };
   safetensors?: {
     total?: number;
     parameters?: Record<string, number>;
@@ -95,6 +102,41 @@ function knownGatedConfigForModel(modelId: string): RawModelConfig | undefined {
   return config ? { ...config } : undefined;
 }
 
+function uniqueModelIds(modelIds: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const modelId of modelIds) {
+    const trimmed = modelId.trim();
+    const key = trimmed.toLowerCase();
+
+    if (trimmed.includes("/") && !seen.has(key)) {
+      seen.add(key);
+      unique.push(trimmed);
+    }
+  }
+
+  return unique;
+}
+
+function baseModelCandidates(info: HuggingFaceModelInfo): string[] {
+  const cardBaseModels = Array.isArray(info.cardData?.base_model)
+    ? info.cardData.base_model
+    : typeof info.cardData?.base_model === "string"
+      ? [info.cardData.base_model]
+      : [];
+  const directTagBaseModels =
+    info.tags
+      ?.map((tag) => tag.match(/^base_model:(?!quantized:)(.+)$/)?.[1])
+      .filter((modelId): modelId is string => Boolean(modelId)) ?? [];
+  const quantizedTagBaseModels =
+    info.tags
+      ?.map((tag) => tag.match(/^base_model:quantized:(.+)$/)?.[1])
+      .filter((modelId): modelId is string => Boolean(modelId)) ?? [];
+
+  return uniqueModelIds([...cardBaseModels, ...directTagBaseModels, ...quantizedTagBaseModels]);
+}
+
 function encodeModelId(modelId: string): string {
   return modelId
     .split("/")
@@ -142,6 +184,22 @@ export async function fetchModelConfig(modelId: string): Promise<RawModelConfig>
     }
 
     if (response.status === 404) {
+      const modelInfo = await fetchModelInfo(trimmedModelId);
+      const baseModelId = baseModelCandidates(modelInfo).find(
+        (candidate) => candidate.toLowerCase() !== trimmedModelId.toLowerCase(),
+      );
+
+      if (baseModelId) {
+        const fallbackConfig = await fetchModelConfig(baseModelId);
+        const config = {
+          ...fallbackConfig,
+          _kvanta_warning: `No config.json was found in ${trimmedModelId}, so kvanta used the declared base model config from ${baseModelId}.`,
+        };
+
+        configCache.set(trimmedModelId, { expiresAt: Date.now() + cacheTtlMs, value: config });
+        return config;
+      }
+
       throw new Error("No config.json was found for that model ID.");
     }
 

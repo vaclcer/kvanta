@@ -37,6 +37,12 @@ export const POST: RequestHandler = async ({ request }) => {
 
       if (modelInfo.safetensors?.total) {
         result.weights = estimateWeights(modelInfo.safetensors.total, body.weightPrecision ?? body.precision ?? "float16");
+      } else if (modelInfo.gguf?.total) {
+        result.weights = {
+          precision: body.weightPrecision ?? body.precision ?? "float16",
+          bytes: modelInfo.gguf.total,
+          source: "huggingface_gguf",
+        };
       } else {
         result.warnings = [
           ...result.warnings,

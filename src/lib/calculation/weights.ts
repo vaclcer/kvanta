@@ -1,10 +1,10 @@
 import { getPrecisionBytes, type PrecisionId } from "$lib/calculation/dtypes";
 
 export type WeightEstimate = {
-  parameterCount: number;
+  parameterCount?: number;
   precision: PrecisionId;
   bytes: number;
-  source: "huggingface_safetensors";
+  source: "huggingface_safetensors" | "huggingface_gguf";
 };
 
 export function estimateWeightBytes(parameterCount: number, precision: PrecisionId): number {

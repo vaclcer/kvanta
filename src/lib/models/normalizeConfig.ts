@@ -124,7 +124,7 @@ function buildCacheStrategy(config: RawModelConfig, modelType: string | undefine
     }
   }
 
-  if (modelType === "qwen3_5_moe_text") {
+  if (modelType === "qwen3_5_moe_text" || modelType === "qwen3_5_text") {
     const linearKeyHeadDim = readNumber(config, "linear_key_head_dim");
     const linearValueHeadDim = readNumber(config, "linear_value_head_dim");
     const linearKeyHeads = readNumber(config, "linear_num_key_heads");
@@ -261,7 +261,7 @@ export function normalizeConfig(
 
   if (cacheStrategy.kind === "qwen3_5_moe_hybrid") {
     warnings.push(
-      "Qwen3.5 MoE uses a hybrid cache: normal K/V for full-attention layers plus fixed linear-attention convolution and recurrent states.",
+      "Qwen3.5/Qwen3.6 hybrid attention uses normal K/V for full-attention layers plus fixed linear-attention convolution and recurrent states.",
     );
   }
 

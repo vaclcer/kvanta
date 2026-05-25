@@ -208,6 +208,41 @@ describe("calculateKvCache", () => {
     expect(result.totalBytes).toBe(36 * linearLayerBytes + 12 * fullLayerBytes);
   });
 
+  it("calculates Qwen3.5/Qwen3.6 text hybrid full and linear attention cache", () => {
+    const model = normalize({
+      model_type: "qwen3_5",
+      text_config: {
+        dtype: "bfloat16",
+        model_type: "qwen3_5_text",
+        hidden_size: 5120,
+        num_hidden_layers: 4,
+        num_attention_heads: 40,
+        num_key_value_heads: 8,
+        head_dim: 128,
+        layer_types: ["linear_attention", "linear_attention", "linear_attention", "full_attention"],
+        linear_key_head_dim: 128,
+        linear_value_head_dim: 128,
+        linear_num_key_heads: 16,
+        linear_num_value_heads: 48,
+        linear_conv_kernel_dim: 4,
+      },
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 1024,
+      batchSize: 1,
+      precision: "bfloat16",
+    });
+
+    const linearLayerBytes = 81_920 + 3_145_728;
+    const fullLayerBytes = 1024 * 8 * 128 * 2 * 2;
+
+    expect(result.model.cacheStrategy.kind).toBe("qwen3_5_moe_hybrid");
+    expect(result.layerBreakdown.filter((layer) => layer.attention === "linear")).toHaveLength(3);
+    expect(result.totalBytes).toBe(3 * linearLayerBytes + fullLayerBytes);
+  });
+
   it("calculates MLA compressed cache (DeepSeek-V3 style)", () => {
     const model = normalize({
       model_type: "deepseek_v3",

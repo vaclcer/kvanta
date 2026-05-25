@@ -501,7 +501,15 @@
   }
 
   function weightBytesFor(result: CalculateResult): number {
-    return result.weights ? result.weights.parameterCount * getPrecisionBytes(weightPrecision) : 0;
+    if (!result.weights) {
+      return 0;
+    }
+
+    if (result.weights.source === "huggingface_gguf") {
+      return result.weights.bytes;
+    }
+
+    return result.weights.parameterCount ? result.weights.parameterCount * getPrecisionBytes(weightPrecision) : 0;
   }
 
   function calculateKvAtContext(result: CalculateResult, context: number): number {
@@ -898,7 +906,7 @@
                     {@render Info("attention_heads", formatInteger(model.result.model.numAttentionHeads))}
                     {@render Info("kv_heads", formatInteger(model.result.model.numKeyValueHeads))}
                     {@render Info("head_dim", formatInteger(model.result.model.headDim))}
-                    {@render Info("params", model.result.weights ? formatInteger(model.result.weights.parameterCount) : "unknown")}
+                    {@render Info("params", model.result.weights?.parameterCount ? formatInteger(model.result.weights.parameterCount) : "unknown")}
                     {@render Info("weights", model.result.weights ? formatBytes(weightBytesFor(model.result), "gib") : "unknown")}
                     {@render Info("max_position", model.result.model.maxPositionEmbeddings ? formatInteger(model.result.model.maxPositionEmbeddings) : "unknown")}
                     {@render Info("architecture", model.result.model.architectures[0] ?? "unknown")}
