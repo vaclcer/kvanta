@@ -27,6 +27,7 @@ export type HuggingFaceModelInfo = {
 export type HuggingFaceModelSearchResult = {
   id: string;
   pipelineTag?: string;
+  trendingScore?: number;
   downloads?: number;
   likes?: number;
   gated?: boolean | "auto" | "manual";
@@ -36,6 +37,7 @@ export type HuggingFaceModelSearchResult = {
 type RawHuggingFaceModelSearchResult = {
   id?: unknown;
   pipeline_tag?: unknown;
+  trendingScore?: unknown;
   downloads?: unknown;
   likes?: unknown;
   gated?: unknown;
@@ -142,6 +144,7 @@ function normalizeSearchResult(result: RawHuggingFaceModelSearchResult): Hugging
   return {
     id: result.id,
     pipelineTag: typeof result.pipeline_tag === "string" ? result.pipeline_tag : undefined,
+    trendingScore: typeof result.trendingScore === "number" ? result.trendingScore : undefined,
     downloads: typeof result.downloads === "number" ? result.downloads : undefined,
     likes: typeof result.likes === "number" ? result.likes : undefined,
     gated:
@@ -177,7 +180,7 @@ export async function searchHuggingFaceModels(query: string): Promise<HuggingFac
       const searchParams = new URLSearchParams({
         search: trimmedQuery,
         pipeline_tag: pipelineTag,
-        sort: "downloads",
+        sort: "trendingScore",
         direction: "-1",
         limit: "8",
         full: "false",
@@ -203,7 +206,12 @@ export async function searchHuggingFaceModels(query: string): Promise<HuggingFac
   }
 
   const results = [...resultsById.values()]
-    .sort((left, right) => (right.downloads ?? 0) - (left.downloads ?? 0))
+    .sort(
+      (left, right) =>
+        (right.trendingScore ?? 0) - (left.trendingScore ?? 0) ||
+        (right.downloads ?? 0) - (left.downloads ?? 0) ||
+        (right.likes ?? 0) - (left.likes ?? 0),
+    )
     .slice(0, 12);
 
   modelSearchCache.set(cacheKey, { expiresAt: Date.now() + searchCacheTtlMs, value: results });

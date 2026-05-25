@@ -18,6 +18,7 @@
   type ModelSearchResult = {
     id: string;
     pipelineTag?: string;
+    trendingScore?: number;
     downloads?: number;
     likes?: number;
     gated?: boolean | "auto" | "manual";
@@ -146,7 +147,11 @@
   }
 
   function searchResultMeta(result: ModelSearchResult): string {
-    const parts = [result.pipelineTag, result.downloads !== undefined ? `${formatInteger(result.downloads)} downloads` : undefined];
+    const parts = [
+      result.pipelineTag,
+      result.trendingScore !== undefined ? `${formatInteger(result.trendingScore)} trending` : undefined,
+      result.downloads !== undefined ? `${formatInteger(result.downloads)} downloads` : undefined,
+    ];
 
     if (result.gated) {
       parts.push("gated");
