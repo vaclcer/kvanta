@@ -51,6 +51,50 @@ const cacheTtlMs = 1000 * 60 * 10;
 const searchCacheTtlMs = 1000 * 60 * 3;
 const modelSearchPipelineTags = ["text-generation", "text2text-generation", "image-text-to-text"];
 
+const knownGatedModelConfigs = new Map<string, RawModelConfig>([
+  [
+    "meta-llama/llama-3.1-8b",
+    {
+      architectures: ["LlamaForCausalLM"],
+      model_type: "llama",
+      hidden_size: 4096,
+      intermediate_size: 14336,
+      num_hidden_layers: 32,
+      num_attention_heads: 32,
+      num_key_value_heads: 8,
+      head_dim: 128,
+      max_position_embeddings: 131072,
+      rope_theta: 500000,
+      torch_dtype: "bfloat16",
+      _kvanta_warning:
+        "Hugging Face gates the canonical config.json for this model, so kvanta used a built-in Llama 3.1 8B architecture profile.",
+    },
+  ],
+  [
+    "meta-llama/llama-3.1-8b-instruct",
+    {
+      architectures: ["LlamaForCausalLM"],
+      model_type: "llama",
+      hidden_size: 4096,
+      intermediate_size: 14336,
+      num_hidden_layers: 32,
+      num_attention_heads: 32,
+      num_key_value_heads: 8,
+      head_dim: 128,
+      max_position_embeddings: 131072,
+      rope_theta: 500000,
+      torch_dtype: "bfloat16",
+      _kvanta_warning:
+        "Hugging Face gates the canonical config.json for this model, so kvanta used a built-in Llama 3.1 8B architecture profile.",
+    },
+  ],
+]);
+
+function knownGatedConfigForModel(modelId: string): RawModelConfig | undefined {
+  const config = knownGatedModelConfigs.get(modelId.toLowerCase());
+  return config ? { ...config } : undefined;
+}
+
 function encodeModelId(modelId: string): string {
   return modelId
     .split("/")
@@ -87,6 +131,13 @@ export async function fetchModelConfig(modelId: string): Promise<RawModelConfig>
 
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
+      const fallbackConfig = knownGatedConfigForModel(trimmedModelId);
+
+      if (fallbackConfig) {
+        configCache.set(trimmedModelId, { expiresAt: Date.now() + cacheTtlMs, value: fallbackConfig });
+        return fallbackConfig;
+      }
+
       throw new Error("Hugging Face rejected the request. This model may be gated or private.");
     }
 

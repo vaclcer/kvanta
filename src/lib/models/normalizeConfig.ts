@@ -233,6 +233,11 @@ export function normalizeConfig(
   const architectures = readStringArray(config, "architectures");
   const modelType = readString(config, "model_type");
   const cacheStrategy = buildCacheStrategy(config, modelType);
+  const kvantaWarning = readString(config, "_kvanta_warning");
+
+  if (kvantaWarning) {
+    warnings.push(kvantaWarning);
+  }
 
   if (config.is_encoder_decoder === true) {
     unsupportedReasons.push("Encoder-decoder KV cache formulas are architecture-specific and not enabled yet.");
