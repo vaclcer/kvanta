@@ -711,7 +711,7 @@
                 {/each}
                 <line x1="48" x2="760" y1="300" y2="300" />
                 <line x1="48" x2="48" y1="38" y2="300" />
-                <text x="648" y="34">{graphModeLabel()}</text>
+                <text x="760" y="34" text-anchor="end">{graphModeLabel()}</text>
                 {#each graphSeries as series}
                   <path d={linePath(series.points)} stroke={series.color} />
                   {#each series.points as point}
