@@ -1,0 +1,28 @@
+{
+  "name": "kv-cache-vram-calculator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || true",
+    "lint": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sveltejs/adapter-auto": "^7.0.1",
+    "@sveltejs/kit": "^2.61.1",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "svelte": "^5.55.9",
+    "vite": "^8.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "svelte-check": "^4.3.4",
+    "typescript": "^5",
+    "vitest": "^4.1.7"
+  }
+}
