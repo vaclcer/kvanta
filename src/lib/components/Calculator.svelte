@@ -1012,22 +1012,24 @@
   }
 
   .config-grid {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 22px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    grid-template-rows: max-content max-content;
+    align-items: start;
+    column-gap: 36px;
+    row-gap: 8px;
+    overflow-x: auto;
   }
 
   .config-grid > label,
   .config-grid > .field {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: contents;
   }
 
   .config-grid label span,
   .config-grid .field > span {
-    flex: none;
+    grid-row: 1;
     margin: 0;
     white-space: nowrap;
     font-size: 14px;
@@ -1036,8 +1038,14 @@
   }
 
   .config-grid label input {
+    grid-row: 2;
     padding: 0 8px;
     font-size: 13px;
+  }
+
+  .config-grid .precision-grid,
+  .config-grid .mode-switch {
+    grid-row: 2;
   }
 
   .config-grid > label:first-child input {
@@ -1280,11 +1288,7 @@
     }
 
     .config-grid {
-      gap: 18px 46px;
-    }
-
-    .config-grid > .field {
-      flex-basis: auto;
+      column-gap: 46px;
     }
   }
 </style>
