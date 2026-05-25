@@ -35,15 +35,13 @@ export function calculateKvCache({
         ? Math.min(sequenceLength, layer.windowSize)
         : sequenceLength;
 
-    if (model.cacheStrategy.kind === "glm_moe_dsa_expanded") {
-      const keyBytes =
-        batchSize * tokens * model.numAttentionHeads * model.cacheStrategy.keyHeadDim * precisionBytes;
-      const valueBytes =
-        batchSize * tokens * model.numAttentionHeads * model.cacheStrategy.valueHeadDim * precisionBytes;
+    if (model.cacheStrategy.kind === "glm_moe_dsa_compressed") {
+      const latentBytes = batchSize * tokens * model.cacheStrategy.kvLoraRank * precisionBytes;
+      const ropeBytes = batchSize * tokens * model.cacheStrategy.qkRopeHeadDim * precisionBytes;
       const indexerBytes = batchSize * tokens * model.cacheStrategy.indexHeadDim * precisionBytes;
       const components: Record<string, number> = {
-        keyBytes,
-        valueBytes,
+        latentBytes,
+        ropeBytes,
         indexerBytes,
       };
 
@@ -51,7 +49,7 @@ export function calculateKvCache({
         index: layer.index,
         attention: layer.attention,
         tokens,
-        bytes: keyBytes + valueBytes + indexerBytes,
+        bytes: latentBytes + ropeBytes + indexerBytes,
         components,
       };
     }
@@ -189,7 +187,13 @@ export function calculateKvCache({
       unsupportedReasons: model.unsupportedReasons,
     },
     assumptions:
-      model.cacheStrategy.kind === "deepseek_v4_hybrid"
+      model.cacheStrategy.kind === "glm_moe_dsa_compressed"
+        ? [
+            `GLM MoE DSA stores optimized compressed MLA cache elements: kv_lora_rank (${model.cacheStrategy.kvLoraRank}) + qk_rope_head_dim (${model.cacheStrategy.qkRopeHeadDim}).`,
+            `DSA indexer key cache stores index_head_dim (${model.cacheStrategy.indexHeadDim}) elements per token per layer.`,
+            `KV precision ${precision} uses ${precisionBytes} bytes per element.`,
+          ]
+        : model.cacheStrategy.kind === "deepseek_v4_hybrid"
         ? [
             `DeepSeek V4 hybrid cache uses latent cache elements from head_dim, not expanded key/value tensors.`,
             `KV precision ${precision} uses ${precisionBytes} bytes per latent KV element.`,

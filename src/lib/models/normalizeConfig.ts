@@ -145,15 +145,15 @@ function buildCacheStrategy(config: RawModelConfig, modelType: string | undefine
   }
 
   if (modelType === "glm_moe_dsa") {
-    const keyHeadDim = readNumber(config, "qk_head_dim");
-    const valueHeadDim = readNumber(config, "v_head_dim");
+    const kvLoraRank = readNumber(config, "kv_lora_rank");
+    const qkRopeHeadDim = readNumber(config, "qk_rope_head_dim");
     const indexHeadDim = readNumber(config, "index_head_dim");
 
-    if (keyHeadDim && valueHeadDim && indexHeadDim) {
+    if (kvLoraRank && qkRopeHeadDim && indexHeadDim) {
       return {
-        kind: "glm_moe_dsa_expanded",
-        keyHeadDim,
-        valueHeadDim,
+        kind: "glm_moe_dsa_compressed",
+        kvLoraRank,
+        qkRopeHeadDim,
         indexHeadDim,
       };
     }
@@ -247,9 +247,9 @@ export function normalizeConfig(
     unsupportedReasons.push("MLA/compressed-cache architecture detected but missing required fields (kv_lora_rank + qk_rope_head_dim).");
   }
 
-  if (cacheStrategy.kind === "glm_moe_dsa_expanded") {
+  if (cacheStrategy.kind === "glm_moe_dsa_compressed") {
     warnings.push(
-      "GLM MoE DSA uses the Hugging Face Transformers cache layout: expanded attention K/V plus a per-layer DSA indexer key cache.",
+      "GLM MoE DSA uses an optimized compressed MLA cache plus a per-layer DSA indexer key cache.",
     );
   }
 

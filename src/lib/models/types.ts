@@ -16,9 +16,9 @@ export type CacheStrategy =
       kind: "standard";
     }
   | {
-      kind: "glm_moe_dsa_expanded";
-      keyHeadDim: number;
-      valueHeadDim: number;
+      kind: "glm_moe_dsa_compressed";
+      kvLoraRank: number;
+      qkRopeHeadDim: number;
       indexHeadDim: number;
     }
   | {

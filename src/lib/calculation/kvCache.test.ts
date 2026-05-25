@@ -72,7 +72,7 @@ describe("calculateKvCache", () => {
     expect(result.totalBytes).toBe((2048 + 512) * 2 * 128 * 2 * 1);
   });
 
-  it("calculates GLM MoE DSA expanded K/V and indexer cache", () => {
+  it("calculates GLM MoE DSA compressed MLA and indexer cache", () => {
     const model = normalize({
       dtype: "bfloat16",
       model_type: "glm_moe_dsa",
@@ -95,13 +95,39 @@ describe("calculateKvCache", () => {
       batchSize: 1,
       precision: "bfloat16",
     });
-    const keyBytes = 4096 * 64 * 256 * 2;
-    const valueBytes = 4096 * 64 * 256 * 2;
+    const latentBytes = 4096 * 512 * 2;
+    const ropeBytes = 4096 * 64 * 2;
     const indexerBytes = 4096 * 128 * 2;
 
-    expect(result.model.cacheStrategy.kind).toBe("glm_moe_dsa_expanded");
-    expect(result.layerBreakdown[0].components).toEqual({ keyBytes, valueBytes, indexerBytes });
-    expect(result.totalBytes).toBe(78 * (keyBytes + valueBytes + indexerBytes));
+    expect(result.model.cacheStrategy.kind).toBe("glm_moe_dsa_compressed");
+    expect(result.layerBreakdown[0].components).toEqual({ latentBytes, ropeBytes, indexerBytes });
+    expect(result.totalBytes).toBe(78 * (latentBytes + ropeBytes + indexerBytes));
+  });
+
+  it("keeps GLM-5.1 long-context cache in compressed DSA range", () => {
+    const model = normalize({
+      dtype: "bfloat16",
+      architectures: ["GlmMoeDsaForCausalLM"],
+      model_type: "glm_moe_dsa",
+      hidden_size: 6144,
+      num_hidden_layers: 78,
+      num_attention_heads: 64,
+      num_key_value_heads: 64,
+      head_dim: 64,
+      qk_rope_head_dim: 64,
+      kv_lora_rank: 512,
+      index_head_dim: 128,
+      max_position_embeddings: 202752,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 128000,
+      batchSize: 10,
+      precision: "bfloat16",
+    });
+
+    expect(result.totalBytes).toBe(78 * 10 * 128000 * (512 + 64 + 128) * 2);
   });
 
   it("calculates DeepSeek V4 hybrid sparse cache from compress ratios", () => {
