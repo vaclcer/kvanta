@@ -353,6 +353,7 @@
   <div class="workspace">
     <header class="brand">
       <h1 aria-label="kvanta"><span>k</span><span>v</span><span>a</span><span>n</span><span>t</span><span>a</span></h1>
+      <p>LLM KV-cache and model-weight VRAM calculator.</p>
     </header>
 
     <section class="picker-panel">
@@ -582,6 +583,8 @@
   }
 
   .brand {
+    display: grid;
+    gap: 9px;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--line);
   }
@@ -621,6 +624,13 @@
   h1 span:nth-child(3n) {
     --rise: 2px;
     --skew: -13deg;
+  }
+
+  .brand p {
+    color: rgb(17 17 17 / 52%);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
   }
 
   h2 {
