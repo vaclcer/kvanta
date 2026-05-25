@@ -398,10 +398,14 @@
   }
 
   function hoverContextFromEvent(event: PointerEvent): number {
-    const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const svgX = ((event.clientX - rect.left) / rect.width) * 800;
     const clampedX = Math.min(748, Math.max(48, svgX));
     return Math.max(1, Math.round(((clampedX - 48) / 700) * graphMaxContext));
+  }
+
+  function graphPercent(value: number, total: number): string {
+    return `${(value / total) * 100}%`;
   }
 
   function handleGraphPointerMove(event: PointerEvent) {
@@ -590,51 +594,64 @@
           {#if graphSeries.length === 0}
             <p class="empty">Select at least one processed model to draw the footprint graph.</p>
           {:else}
-            <svg
-              class="graph"
-              viewBox="0 0 800 340"
-              role="img"
-              aria-label={graphMode === "kv" ? "KV cache growth by context size" : "Total VRAM footprint growth by context size"}
+            <div
+              class="graph-frame"
+              role="presentation"
               onpointermove={handleGraphPointerMove}
               onpointerleave={() => (hoveredGraph = null)}
             >
-              {#each graphScale.yTicks as tick}
-                <line class="grid" x1="48" x2="760" y1={pointToY(tick)} y2={pointToY(tick)} />
-                <text x="54" y={pointToY(tick) - 7}>{formatBytes(tick, "gib")}</text>
-              {/each}
-              {#each graphScale.xTicks as tick}
-                <line class="grid" x1={pointToX(tick)} x2={pointToX(tick)} y1="38" y2="300" />
-                <text x={pointToX(tick) - 18} y="326">{formatInteger(tick)}</text>
-              {/each}
-              <line x1="48" x2="760" y1="300" y2="300" />
-              <line x1="48" x2="48" y1="38" y2="300" />
-              <text x="648" y="34">{graphMode === "kv" ? "kv cache" : "kv + weights"}</text>
-              {#each graphSeries as series}
-                <path d={linePath(series.points)} stroke={series.color} />
-                {#each series.points as point}
-                  <circle cx={pointToX(point.context)} cy={pointToY(point.bytes)} r="3" fill={series.color}>
-                    <title>{series.id}: {formatBytes(point.bytes, "gib")} shown, {formatBytes(point.kvBytes, "gib")} KV, {formatBytes(point.weightBytes, "gib")} weights at {formatInteger(point.context)} tokens</title>
-                  </circle>
+              <svg
+                class="graph"
+                viewBox="0 0 800 340"
+                role="img"
+                aria-label={graphMode === "kv" ? "KV cache growth by context size" : "Total VRAM footprint growth by context size"}
+              >
+                {#each graphScale.yTicks as tick}
+                  <line class="grid" x1="48" x2="760" y1={pointToY(tick)} y2={pointToY(tick)} />
+                  <text x="54" y={pointToY(tick) - 7}>{formatBytes(tick, "gib")}</text>
                 {/each}
-              {/each}
-              {#if hoveredGraph}
-                <line class="hover-line" x1={hoveredGraph.x} x2={hoveredGraph.x} y1="38" y2="300" />
-                {#each hoveredGraph.items as item}
-                  <circle class="hover-dot" cx={hoveredGraph.x} cy={item.y} r="5" fill={item.color} />
+                {#each graphScale.xTicks as tick}
+                  <line class="grid" x1={pointToX(tick)} x2={pointToX(tick)} y1="38" y2="300" />
+                  <text x={pointToX(tick) - 18} y="326">{formatInteger(tick)}</text>
                 {/each}
-                <g class="tooltip" transform={`translate(${tooltipX(hoveredGraph.x)}, 48)`}>
-                  <rect width={tooltipWidth} height={48 + hoveredGraph.items.length * 74} />
-                  <text x="12" y="22">ctx {formatInteger(hoveredGraph.context)}</text>
-                  {#each hoveredGraph.items as item, index}
-                    <circle cx="15" cy={47 + index * 74} r="4" fill={item.color} />
-                    <text class="tooltip-name" x="26" y={50 + index * 74}>{compactName(item.id)}</text>
-                    <text x="12" y={72 + index * 74}>shown {formatBytes(item.bytes, "gib")}</text>
-                    <text x="12" y={89 + index * 74}>kv {formatBytes(item.kvBytes, "gib")}</text>
-                    <text x="12" y={106 + index * 74}>weights {formatBytes(item.weightBytes, "gib")}</text>
+                <line x1="48" x2="760" y1="300" y2="300" />
+                <line x1="48" x2="48" y1="38" y2="300" />
+                <text x="648" y="34">{graphMode === "kv" ? "kv cache" : "kv + weights"}</text>
+                {#each graphSeries as series}
+                  <path d={linePath(series.points)} stroke={series.color} />
+                  {#each series.points as point}
+                    <circle cx={pointToX(point.context)} cy={pointToY(point.bytes)} r="3" fill={series.color}>
+                      <title>{series.id}: {formatBytes(point.bytes, "gib")} shown, {formatBytes(point.kvBytes, "gib")} KV, {formatBytes(point.weightBytes, "gib")} weights at {formatInteger(point.context)} tokens</title>
+                    </circle>
                   {/each}
-                </g>
+                {/each}
+                {#if hoveredGraph}
+                  <line class="hover-line" x1={hoveredGraph.x} x2={hoveredGraph.x} y1="38" y2="300" />
+                  {#each hoveredGraph.items as item}
+                    <circle class="hover-dot" cx={hoveredGraph.x} cy={item.y} r="5" fill={item.color} />
+                  {/each}
+                {/if}
+              </svg>
+
+              {#if hoveredGraph}
+                <div
+                  class="tooltip"
+                  role="tooltip"
+                  style={`left: ${graphPercent(tooltipX(hoveredGraph.x), 800)}; top: ${graphPercent(48, 340)}; width: min(${tooltipWidth}px, calc(100% - ${graphPercent(tooltipX(hoveredGraph.x), 800)} - 12px));`}
+                  onpointermove={(event) => event.stopPropagation()}
+                >
+                  <p>ctx {formatInteger(hoveredGraph.context)}</p>
+                  {#each hoveredGraph.items as item}
+                    <div class="tooltip-item">
+                      <strong><i style={`background:${item.color}`}></i>{compactName(item.id)}</strong>
+                      <span>shown {formatBytes(item.bytes, "gib")}</span>
+                      <span>kv {formatBytes(item.kvBytes, "gib")}</span>
+                      <span>weights {formatBytes(item.weightBytes, "gib")}</span>
+                    </div>
+                  {/each}
+                </div>
               {/if}
-            </svg>
+            </div>
 
             <div class="legend">
               {#each graphSeries as series}
@@ -1092,6 +1109,10 @@
     padding: 16px;
   }
 
+  .graph-frame {
+    position: relative;
+  }
+
   .graph {
     display: block;
     width: 100%;
@@ -1133,22 +1154,47 @@
   }
 
   .tooltip {
-    pointer-events: none;
-  }
-
-  .tooltip rect {
-    fill: rgb(255 255 255 / 96%);
-    stroke: var(--ink);
-    stroke-width: 1;
-  }
-
-  .tooltip text {
-    fill: var(--ink);
+    position: absolute;
+    max-height: calc(100% - 14.2% - 12px);
+    overflow-y: auto;
+    border: 1px solid var(--ink);
+    background: rgb(255 255 255 / 96%);
+    padding: 12px;
+    color: var(--ink);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     font-size: 11px;
+    line-height: 1.35;
+    pointer-events: auto;
+    scrollbar-width: thin;
   }
 
-  .tooltip .tooltip-name {
+  .tooltip p {
+    margin-bottom: 12px;
+    font-size: 12px;
+  }
+
+  .tooltip-item {
+    display: grid;
+    gap: 4px;
+    padding-bottom: 12px;
+  }
+
+  .tooltip-item + .tooltip-item {
+    padding-top: 4px;
+  }
+
+  .tooltip-item strong {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-weight: 700;
+  }
+
+  .tooltip-item i {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex: none;
   }
 
   .legend {

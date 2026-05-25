@@ -28,15 +28,3 @@ npm run typecheck
 npm test
 npm run build
 ```
-
-## Deployment
-
-The app is deployed on Vercel. 🚀
-
-`kvanta.vcerny.cz` is a custom domain pointed to Vercel with a `CNAME` record.
-
-For gated or private Hugging Face models, set this environment variable in Vercel:
-
-```txt
-HUGGINGFACE_TOKEN=...
-```
