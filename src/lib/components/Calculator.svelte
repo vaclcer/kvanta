@@ -538,7 +538,7 @@
           <input min="1" type="number" bind:value={batchSize} />
         </label>
         <fieldset>
-          <legend>KV Precision (bits)</legend>
+          <legend>KV bits</legend>
           <div class="precision-grid">
             {#each kvPrecisionOptions as option}
               <button
@@ -554,7 +554,7 @@
           </div>
         </fieldset>
         <fieldset>
-          <legend>Weights Quantization (bits)</legend>
+          <legend>Weights bits</legend>
           <div class="precision-grid">
             {#each weightPrecisionOptions as option}
               <button
@@ -570,7 +570,7 @@
           </div>
         </fieldset>
         <fieldset>
-          <legend>Graph Scope</legend>
+          <legend>Graph</legend>
           <div class="mode-switch">
             <button class:active={graphMode === "kv"} type="button" onclick={() => (graphMode = "kv")}>KV only</button>
             <button class:active={graphMode === "total"} type="button" onclick={() => (graphMode = "total")}>KV + weights</button>
@@ -787,7 +787,7 @@
   }
 
   .config-panel {
-    padding: 12px;
+    padding: 10px 12px;
   }
 
   .picker {
@@ -892,7 +892,7 @@
   .config-panel input,
   .config-panel .precision-grid button,
   .config-panel .mode-switch button {
-    min-height: 36px;
+    min-height: 30px;
   }
 
   input {
@@ -921,7 +921,8 @@
 
   .config-panel .precision-grid button,
   .config-panel .mode-switch button {
-    padding: 0 10px;
+    padding: 0 8px;
+    font-size: 13px;
   }
 
   .picker > button:hover,
@@ -1023,22 +1024,50 @@
 
   .config-grid {
     display: grid;
-    grid-template-columns: 150px 92px 214px 250px 186px;
-    align-items: flex-start;
-    gap: 18px 22px;
+    grid-template-columns: 184px 112px 166px 198px 176px;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .config-grid > label,
+  .config-grid > fieldset {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .config-grid label span,
+  .config-grid legend {
+    flex: none;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .config-grid label input {
+    flex: 1;
+    padding: 0 8px;
+    font-size: 13px;
+  }
+
+  .config-grid > label:first-child input {
+    max-width: 86px;
+  }
+
+  .config-grid > label:nth-child(2) input {
+    max-width: 42px;
   }
 
   .precision-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(3, 34px);
+    gap: 6px;
   }
 
   .mode-switch {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    grid-template-columns: 58px 86px;
+    gap: 6px;
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 1120px) {
     .config-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
