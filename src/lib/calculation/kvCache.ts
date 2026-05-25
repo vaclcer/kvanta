@@ -35,7 +35,7 @@ export function calculateKvCache({
         ? Math.min(sequenceLength, layer.windowSize)
         : sequenceLength;
 
-    if (model.cacheStrategy.kind === "glm_moe_dsa_compressed") {
+    if (model.cacheStrategy.kind === "dsa_mla_compressed") {
       const latentBytes = batchSize * tokens * model.cacheStrategy.kvLoraRank * precisionBytes;
       const ropeBytes = batchSize * tokens * model.cacheStrategy.qkRopeHeadDim * precisionBytes;
       const indexerBytes = batchSize * tokens * model.cacheStrategy.indexHeadDim * precisionBytes;
@@ -103,6 +103,27 @@ export function calculateKvCache({
         tokens: 1,
         bytes: convBytes + recurrentBytes,
         components,
+      };
+    }
+
+    if (model.cacheStrategy.kind === "gemma4_hybrid") {
+      const keyValueHeads = layer.attention === "full"
+        ? model.cacheStrategy.fullKeyValueHeads
+        : model.cacheStrategy.slidingKeyValueHeads;
+      const headDim = layer.attention === "full"
+        ? model.cacheStrategy.fullHeadDim
+        : model.cacheStrategy.slidingHeadDim;
+      const bytes = batchSize * tokens * keyValueHeads * headDim * 2 * precisionBytes;
+
+      return {
+        index: layer.index,
+        attention: layer.attention,
+        tokens,
+        bytes,
+        components: {
+          keyValueHeads,
+          headDim,
+        },
       };
     }
 
@@ -187,9 +208,9 @@ export function calculateKvCache({
       unsupportedReasons: model.unsupportedReasons,
     },
     assumptions:
-      model.cacheStrategy.kind === "glm_moe_dsa_compressed"
+      model.cacheStrategy.kind === "dsa_mla_compressed"
         ? [
-            `GLM MoE DSA stores optimized compressed MLA cache elements: kv_lora_rank (${model.cacheStrategy.kvLoraRank}) + qk_rope_head_dim (${model.cacheStrategy.qkRopeHeadDim}).`,
+            `DSA/MLA stores optimized compressed MLA cache elements: kv_lora_rank (${model.cacheStrategy.kvLoraRank}) + qk_rope_head_dim (${model.cacheStrategy.qkRopeHeadDim}).`,
             `DSA indexer key cache stores index_head_dim (${model.cacheStrategy.indexHeadDim}) elements per token per layer.`,
             `KV precision ${precision} uses ${precisionBytes} bytes per element.`,
           ]
@@ -203,6 +224,12 @@ export function calculateKvCache({
           ? [
               `Full-attention layers store normal key/value tensors.`,
               `Linear-attention layers store a fixed convolution state at ${precision} plus an FP32 recurrent state.`,
+            ]
+        : model.cacheStrategy.kind === "gemma4_hybrid"
+          ? [
+              `Gemma 4 full-attention layers use num_global_key_value_heads (${model.cacheStrategy.fullKeyValueHeads}) × global_head_dim (${model.cacheStrategy.fullHeadDim}).`,
+              `Gemma 4 sliding-attention layers use num_key_value_heads (${model.cacheStrategy.slidingKeyValueHeads}) × head_dim (${model.cacheStrategy.slidingHeadDim}) capped by sliding_window.`,
+              `KV precision ${precision} uses ${precisionBytes} bytes per element.`,
             ]
         : model.cacheStrategy.kind === "mla_compressed"
           ? [

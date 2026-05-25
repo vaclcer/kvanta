@@ -30,6 +30,42 @@ describe("Hugging Face client", () => {
     expect(config._kvanta_warning).toEqual(expect.stringContaining("built-in Llama 3.1 8B"));
   });
 
+  it("uses the built-in Llama 3.3 70B config when the gated config is rejected", async () => {
+    mockFetch(401);
+
+    const config = await fetchModelConfig("meta-llama/Llama-3.3-70B-Instruct");
+
+    expect(config).toMatchObject({
+      model_type: "llama",
+      hidden_size: 8192,
+      num_hidden_layers: 80,
+      num_attention_heads: 64,
+      num_key_value_heads: 8,
+      head_dim: 128,
+      max_position_embeddings: 131072,
+    });
+    expect(config._kvanta_warning).toEqual(expect.stringContaining("built-in Llama 3.1/3.3 70B"));
+  });
+
+  it("uses the built-in Cohere Command A config when the gated config is rejected", async () => {
+    mockFetch(401);
+
+    const config = await fetchModelConfig("CohereLabs/c4ai-command-a-03-2025");
+
+    expect(config).toMatchObject({
+      model_type: "cohere2",
+      hidden_size: 12288,
+      num_hidden_layers: 64,
+      num_attention_heads: 96,
+      num_key_value_heads: 8,
+      head_dim: 128,
+      sliding_window: 4096,
+      sliding_window_pattern: 4,
+      max_position_embeddings: 131072,
+    });
+    expect(config._kvanta_warning).toEqual(expect.stringContaining("built-in Cohere Command A"));
+  });
+
   it("still rejects unknown gated models", async () => {
     mockFetch(401);
 
@@ -88,5 +124,47 @@ describe("Hugging Face client", () => {
       },
     });
     expect(config._kvanta_warning).toEqual(expect.stringContaining("Qwen/Qwen3.6-27B"));
+  });
+
+  it("merges DeepSeek V3.2 inference config fields missing from the top-level config", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+
+        if (url === "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/raw/main/config.json") {
+          return Response.json({
+            architectures: ["DeepseekV32ForCausalLM"],
+            model_type: "deepseek_v32",
+            hidden_size: 7168,
+            num_hidden_layers: 61,
+            num_attention_heads: 128,
+            kv_lora_rank: 512,
+            qk_rope_head_dim: 64,
+            max_position_embeddings: 163840,
+          });
+        }
+
+        if (url === "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/raw/main/inference/config_671B_v3.2.json") {
+          return Response.json({
+            index_n_heads: 64,
+            index_head_dim: 128,
+            index_topk: 2048,
+          });
+        }
+
+        return new Response("", { status: 500 });
+      }),
+    );
+
+    const config = await fetchModelConfig("deepseek-ai/DeepSeek-V3.2");
+
+    expect(config).toMatchObject({
+      model_type: "deepseek_v32",
+      index_n_heads: 64,
+      index_head_dim: 128,
+      index_topk: 2048,
+    });
+    expect(config._kvanta_warning).toEqual(expect.stringContaining("merged index_head_dim"));
   });
 });

@@ -16,7 +16,14 @@ export type CacheStrategy =
       kind: "standard";
     }
   | {
-      kind: "glm_moe_dsa_compressed";
+      kind: "gemma4_hybrid";
+      fullKeyValueHeads: number;
+      fullHeadDim: number;
+      slidingKeyValueHeads: number;
+      slidingHeadDim: number;
+    }
+  | {
+      kind: "dsa_mla_compressed";
       kvLoraRank: number;
       qkRopeHeadDim: number;
       indexHeadDim: number;

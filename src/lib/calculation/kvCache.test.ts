@@ -50,6 +50,49 @@ describe("calculateKvCache", () => {
     expect(result.totalBytes).toBe(2 * 1024 * 8 * 128 * 2 * 2);
   });
 
+  it("uses Cohere-style patterned sliding and global attention", () => {
+    const model = normalize({
+      model_type: "cohere2",
+      hidden_size: 12288,
+      num_hidden_layers: 8,
+      num_attention_heads: 96,
+      num_key_value_heads: 8,
+      head_dim: 128,
+      sliding_window: 4096,
+      sliding_window_pattern: 4,
+      order_of_interleaved_layers: "local_attn_first",
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 32768,
+      batchSize: 1,
+      precision: "float16",
+    });
+
+    expect(result.layerBreakdown.map((layer) => layer.attention)).toEqual([
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+    ]);
+    expect(result.layerBreakdown.map((layer) => layer.tokens)).toEqual([
+      4096,
+      4096,
+      4096,
+      32768,
+      4096,
+      4096,
+      4096,
+      32768,
+    ]);
+    expect(result.totalBytes).toBe((6 * 4096 + 2 * 32768) * 8 * 128 * 2 * 2);
+  });
+
   it("uses layer_types to mix full and sliding attention", () => {
     const model = normalize({
       hidden_size: 1024,
@@ -99,7 +142,7 @@ describe("calculateKvCache", () => {
     const ropeBytes = 4096 * 64 * 2;
     const indexerBytes = 4096 * 128 * 2;
 
-    expect(result.model.cacheStrategy.kind).toBe("glm_moe_dsa_compressed");
+    expect(result.model.cacheStrategy.kind).toBe("dsa_mla_compressed");
     expect(result.layerBreakdown[0].components).toEqual({ latentBytes, ropeBytes, indexerBytes });
     expect(result.totalBytes).toBe(78 * (latentBytes + ropeBytes + indexerBytes));
   });
@@ -128,6 +171,31 @@ describe("calculateKvCache", () => {
     });
 
     expect(result.totalBytes).toBe(78 * 10 * 128000 * (512 + 64 + 128) * 2);
+  });
+
+  it("locks DeepSeek V3.2 DSA cache with indexer", () => {
+    const model = normalize({
+      architectures: ["DeepseekV32ForCausalLM"],
+      model_type: "deepseek_v32",
+      hidden_size: 7168,
+      num_hidden_layers: 61,
+      num_attention_heads: 128,
+      kv_lora_rank: 512,
+      qk_rope_head_dim: 64,
+      index_head_dim: 128,
+      max_position_embeddings: 163840,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 128000,
+      batchSize: 15,
+      precision: "bfloat16",
+    });
+
+    expect(result.model.cacheStrategy.kind).toBe("dsa_mla_compressed");
+    expect(result.totalBytes).toBe(61 * 128000 * 15 * (512 + 64 + 128) * 2);
+    expect(result.perTokenBytes).toBe(61 * (512 + 64 + 128) * 2);
   });
 
   it("calculates DeepSeek V4 hybrid sparse cache from compress ratios", () => {
@@ -241,6 +309,82 @@ describe("calculateKvCache", () => {
     expect(result.model.cacheStrategy.kind).toBe("qwen3_5_moe_hybrid");
     expect(result.layerBreakdown.filter((layer) => layer.attention === "linear")).toHaveLength(3);
     expect(result.totalBytes).toBe(3 * linearLayerBytes + fullLayerBytes);
+  });
+
+  it("calculates Gemma 4 full/global and sliding KV dimensions separately", () => {
+    const layerTypes = Array.from({ length: 60 }, (_, index) =>
+      (index + 1) % 6 === 0 ? "full_attention" : "sliding_attention",
+    );
+    const model = normalize({
+      model_type: "gemma4",
+      text_config: {
+        dtype: "bfloat16",
+        model_type: "gemma4_text",
+        hidden_size: 5376,
+        num_hidden_layers: 60,
+        num_attention_heads: 32,
+        num_key_value_heads: 16,
+        num_global_key_value_heads: 4,
+        head_dim: 256,
+        global_head_dim: 512,
+        sliding_window: 1024,
+        layer_types: layerTypes,
+        max_position_embeddings: 262144,
+      },
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 128000,
+      batchSize: 10,
+      precision: "bfloat16",
+    });
+
+    const fullLayerBytes = 128000 * 10 * 4 * 512 * 2 * 2;
+    const slidingLayerBytes = 1024 * 10 * 16 * 256 * 2 * 2;
+
+    expect(result.model.cacheStrategy.kind).toBe("gemma4_hybrid");
+    expect(result.layerBreakdown.filter((layer) => layer.attention === "full")).toHaveLength(10);
+    expect(result.layerBreakdown.filter((layer) => layer.attention === "sliding")).toHaveLength(50);
+    expect(result.totalBytes).toBe(10 * fullLayerBytes + 50 * slidingLayerBytes);
+    expect(result.totalBytes).toBe(113_246_208_000);
+  });
+
+  it("calculates smaller Gemma 4 variants when global KV heads are omitted", () => {
+    const layerTypes = Array.from({ length: 35 }, (_, index) =>
+      (index + 1) % 5 === 0 ? "full_attention" : "sliding_attention",
+    );
+    const model = normalize({
+      model_type: "gemma4",
+      text_config: {
+        dtype: "bfloat16",
+        model_type: "gemma4_text",
+        hidden_size: 2304,
+        num_hidden_layers: 35,
+        num_attention_heads: 8,
+        num_key_value_heads: 1,
+        num_global_key_value_heads: null,
+        head_dim: 256,
+        global_head_dim: 512,
+        sliding_window: 512,
+        layer_types: layerTypes,
+      },
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 128000,
+      batchSize: 10,
+      precision: "bfloat16",
+    });
+
+    const fullLayerBytes = 128000 * 10 * 1 * 512 * 2 * 2;
+    const slidingLayerBytes = 512 * 10 * 1 * 256 * 2 * 2;
+
+    expect(result.model.cacheStrategy.kind).toBe("gemma4_hybrid");
+    expect(result.layerBreakdown.filter((layer) => layer.attention === "full")).toHaveLength(7);
+    expect(result.layerBreakdown.filter((layer) => layer.attention === "sliding")).toHaveLength(28);
+    expect(result.totalBytes).toBe(7 * fullLayerBytes + 28 * slidingLayerBytes);
   });
 
   it("calculates MLA compressed cache (DeepSeek-V3 style)", () => {

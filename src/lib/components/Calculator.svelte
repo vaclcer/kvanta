@@ -8,6 +8,7 @@
     weightPrecisionOptions,
     type PrecisionId,
   } from "$lib/calculation/dtypes";
+  import { nvidiaGpuOptions, type NvidiaGpuOption } from "$lib/hardware/gpus";
   import type { CalculateResult, NormalizedModelConfig } from "$lib/models/types";
 
   type CalculateResponse = {
@@ -42,7 +43,6 @@
     context: number;
     kvBytes: number;
     weightBytes: number;
-    overheadBytes: number;
     bytes: number;
   };
 
@@ -67,32 +67,40 @@
       color: string;
       kvBytes: number;
       weightBytes: number;
-      overheadBytes: number;
       bytes: number;
       y: number;
     }>;
   };
 
-  type GraphComponentId = "kv" | "weights" | "runtime";
+  type GraphComponentId = "kv" | "weights";
   type GraphComponents = Record<GraphComponentId, boolean>;
-  type RuntimeOverheadId = "lean" | "typical" | "conservative";
+  type GpuSelection = {
+    gpuId: string;
+    quantity: number;
+  };
   type StoredSettings = {
     sequenceLength?: unknown;
     batchSize?: unknown;
     precision?: unknown;
     weightPrecision?: unknown;
     graphComponents?: unknown;
-    runtimeOverhead?: unknown;
+    vllmGpuMemoryUtilization?: unknown;
+    gpuSelections?: unknown;
+    modelsOpen?: unknown;
+    configOpen?: unknown;
+    hardwareOpen?: unknown;
   };
 
   const processedModelsKey = "kvanta:processed-models";
   const settingsKey = "kvanta:settings";
   const palette = ["#111111", "#2f6df6", "#d45f00", "#15803d", "#7c3aed", "#be123c"];
-  const runtimeOverheadOptions: Array<{ id: RuntimeOverheadId; label: string; percent: number }> = [
-    { id: "lean", label: "+5", percent: 0.05 },
-    { id: "typical", label: "+10", percent: 0.1 },
-    { id: "conservative", label: "+20", percent: 0.2 },
-  ];
+  const defaultVllmGpuMemoryUtilization = 0.92;
+  const gpuFamilyLabels: Record<NvidiaGpuOption["family"], string> = {
+    consumer: "GeForce",
+    workstation: "Workstation",
+    datacenter: "Datacenter",
+  };
+  const gpuFamilies: NvidiaGpuOption["family"][] = ["consumer", "workstation", "datacenter"];
 
   let modelInput = $state("");
   let processedModels = $state<ProcessedModel[]>([]);
@@ -100,8 +108,14 @@
   let batchSize = $state(1);
   let precision = $state<PrecisionId>("float16");
   let weightPrecision = $state<PrecisionId>("float16");
-  let graphComponents = $state<GraphComponents>({ kv: true, weights: true, runtime: false });
-  let runtimeOverhead = $state<RuntimeOverheadId>("lean");
+  let graphComponents = $state<GraphComponents>({ kv: true, weights: true });
+  let vllmGpuMemoryUtilization = $state(defaultVllmGpuMemoryUtilization);
+  let gpuSelections = $state<GpuSelection[]>([]);
+  let selectedGpuId = $state("rtx-4090");
+  let selectedGpuQuantity = $state(1);
+  let modelsOpen = $state(true);
+  let configOpen = $state(true);
+  let hardwareOpen = $state(false);
   let activeTab = $state<"graph" | "architecture">("graph");
   let pickerError = $state<string | null>(null);
   let modelSearchResults = $state<ModelSearchResult[]>([]);
@@ -112,9 +126,14 @@
   let modelSearchRequestId = 0;
 
   const selectedModels = $derived(processedModels.filter((model) => model.selected && model.result));
-  const selectedRuntimeOverhead = $derived(
-    runtimeOverheadOptions.find((option) => option.id === runtimeOverhead) ?? runtimeOverheadOptions[0],
+  const totalGpuCount = $derived(gpuSelections.reduce((sum, selection) => sum + selection.quantity, 0));
+  const totalGpuVramBytes = $derived(
+    gpuSelections.reduce((sum, selection) => {
+      const gpu = gpuById(selection.gpuId);
+      return sum + (gpu ? gpu.memoryGb * 1000 ** 3 * selection.quantity : 0);
+    }, 0),
   );
+  const vllmVramBytes = $derived(calculateVllmVramBytes());
   const graphSeries = $derived(buildGraphSeries(selectedModels));
   const graphMaxContext = $derived(Math.max(1, sequenceLength));
   const graphScale = $derived(buildGraphScale(graphSeries));
@@ -131,19 +150,102 @@
       bytes += weightBytes;
     }
 
-    if (graphComponents.runtime) {
-      bytes += runtimeOverheadBytes(kvBytes, weightBytes);
-    }
-
     return bytes;
   }
 
-  function runtimeOverheadBytes(kvBytes: number, weightBytes: number): number {
-    return (kvBytes + weightBytes) * selectedRuntimeOverhead.percent;
+  function gpuById(gpuId: string): NvidiaGpuOption | undefined {
+    return nvidiaGpuOptions.find((gpu) => gpu.id === gpuId);
+  }
+
+  function gpuOptionsForFamily(family: NvidiaGpuOption["family"]): NvidiaGpuOption[] {
+    return nvidiaGpuOptions.filter((gpu) => gpu.family === family);
+  }
+
+  function gpuSelectionLabel(selection: GpuSelection): string {
+    const gpu = gpuById(selection.gpuId);
+    return gpu ? `${selection.quantity}x ${gpu.name}` : `${selection.quantity}x unknown GPU`;
+  }
+
+  function gpuSelectionBytes(selection: GpuSelection): number {
+    const gpu = gpuById(selection.gpuId);
+    return gpu ? gpu.memoryGb * 1000 ** 3 * selection.quantity : 0;
+  }
+
+  function expandedGpuMemoryBytes(): number[] {
+    return gpuSelections.flatMap((selection) => {
+      const gpu = gpuById(selection.gpuId);
+      return gpu ? Array.from({ length: selection.quantity }, () => gpu.memoryGb * 1000 ** 3) : [];
+    });
+  }
+
+  function calculateVllmVramBytes(): number {
+    const gpuMemoryBytes = expandedGpuMemoryBytes();
+
+    if (gpuMemoryBytes.length === 0) {
+      return 0;
+    }
+
+    return Math.min(...gpuMemoryBytes) * gpuMemoryBytes.length * vllmGpuMemoryUtilization;
+  }
+
+  function hardwareSummaryLabel(): string {
+    return totalGpuCount > 0 ? `${totalGpuCount} GPU / ${formatBytes(totalGpuVramBytes, "gb")}` : "No GPUs";
+  }
+
+  function formatBytesBoth(bytes: number): string {
+    return `${formatBytes(bytes, "gb")} / ${formatBytes(bytes, "gib")}`;
+  }
+
+  function updateVllmGpuMemoryUtilization(value: number) {
+    vllmGpuMemoryUtilization = Math.max(0.01, Math.min(1, Number.isFinite(value) ? value / 100 : defaultVllmGpuMemoryUtilization));
+    saveSettings();
+  }
+
+  function updateSelectedGpuQuantity(value: number) {
+    selectedGpuQuantity = Math.max(1, Math.min(16, Number.isFinite(value) ? Math.floor(value) : 1));
+  }
+
+  function addGpuSelection() {
+    const gpu = gpuById(selectedGpuId);
+
+    if (!gpu) {
+      return;
+    }
+
+    const quantity = Math.max(1, Math.min(16, selectedGpuQuantity));
+    const existing = gpuSelections.find((selection) => selection.gpuId === selectedGpuId);
+
+    if (existing) {
+      gpuSelections = gpuSelections.map((selection) =>
+        selection.gpuId === selectedGpuId
+          ? { ...selection, quantity: Math.min(99, selection.quantity + quantity) }
+          : selection,
+      );
+    } else {
+      gpuSelections = [...gpuSelections, { gpuId: selectedGpuId, quantity }];
+    }
+
+    saveSettings();
+  }
+
+  function setGpuSelectionQuantity(gpuId: string, quantity: number) {
+    const normalizedQuantity = Math.max(0, Math.min(99, Math.floor(quantity)));
+
+    gpuSelections = normalizedQuantity === 0
+      ? gpuSelections.filter((selection) => selection.gpuId !== gpuId)
+      : gpuSelections.map((selection) =>
+          selection.gpuId === gpuId ? { ...selection, quantity: normalizedQuantity } : selection,
+        );
+    saveSettings();
+  }
+
+  function removeGpuSelection(gpuId: string) {
+    gpuSelections = gpuSelections.filter((selection) => selection.gpuId !== gpuId);
+    saveSettings();
   }
 
   function toggleGraphComponent(component: GraphComponentId) {
-    const activeCount = Number(graphComponents.kv) + Number(graphComponents.weights) + Number(graphComponents.runtime);
+    const activeCount = Number(graphComponents.kv) + Number(graphComponents.weights);
 
     if (graphComponents[component] && activeCount === 1) {
       return;
@@ -167,7 +269,6 @@
     const labels = [
       graphComponents.kv ? "kv" : "",
       graphComponents.weights ? "weights" : "",
-      graphComponents.runtime ? "runtime" : "",
     ].filter(Boolean);
 
     return labels.join(" + ");
@@ -182,10 +283,6 @@
 
     if (graphComponents.weights) {
       parts.push(`${formatBytes(point.weightBytes, "gib")} weights`);
-    }
-
-    if (graphComponents.runtime) {
-      parts.push(`${formatBytes(point.overheadBytes, "gib")} runtime`);
     }
 
     parts.push(`at ${formatInteger(point.context)} tokens`);
@@ -314,7 +411,11 @@
       precision,
       weightPrecision,
       graphComponents,
-      runtimeOverhead,
+      vllmGpuMemoryUtilization,
+      gpuSelections,
+      modelsOpen,
+      configOpen,
+      hardwareOpen,
     };
   }
 
@@ -330,8 +431,28 @@
     return kvPrecisionOptions.some((option) => option.id === value) || weightPrecisionOptions.some((option) => option.id === value);
   }
 
-  function isRuntimeOverheadId(value: unknown): value is RuntimeOverheadId {
-    return runtimeOverheadOptions.some((option) => option.id === value);
+  function normalizeGpuSelections(value: unknown): GpuSelection[] | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+
+    const normalized = value
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return undefined;
+        }
+
+        const source = item as Partial<Record<keyof GpuSelection, unknown>>;
+        const gpuId = typeof source.gpuId === "string" ? source.gpuId : "";
+        const quantity = typeof source.quantity === "number" && Number.isFinite(source.quantity)
+          ? Math.floor(source.quantity)
+          : 0;
+
+        return gpuById(gpuId) && quantity > 0 ? { gpuId, quantity: Math.min(99, quantity) } : undefined;
+      })
+      .filter((selection): selection is GpuSelection => Boolean(selection));
+
+    return normalized.length > 0 ? normalized : undefined;
   }
 
   function normalizeGraphComponents(value: unknown): GraphComponents | undefined {
@@ -343,10 +464,9 @@
     const normalized = {
       kv: source.kv === true,
       weights: source.weights === true,
-      runtime: source.runtime === true,
     };
 
-    return normalized.kv || normalized.weights || normalized.runtime ? normalized : undefined;
+    return normalized.kv || normalized.weights ? normalized : undefined;
   }
 
   function loadSettings() {
@@ -381,8 +501,26 @@
         graphComponents = restoredGraphComponents;
       }
 
-      if (isRuntimeOverheadId(parsed.runtimeOverhead)) {
-        runtimeOverhead = parsed.runtimeOverhead;
+      if (typeof parsed.vllmGpuMemoryUtilization === "number" && Number.isFinite(parsed.vllmGpuMemoryUtilization)) {
+        vllmGpuMemoryUtilization = Math.max(0.01, Math.min(1, parsed.vllmGpuMemoryUtilization));
+      }
+
+      const restoredGpuSelections = normalizeGpuSelections(parsed.gpuSelections);
+
+      if (restoredGpuSelections) {
+        gpuSelections = restoredGpuSelections;
+      }
+
+      if (typeof parsed.modelsOpen === "boolean") {
+        modelsOpen = parsed.modelsOpen;
+      }
+
+      if (typeof parsed.configOpen === "boolean") {
+        configOpen = parsed.configOpen;
+      }
+
+      if (typeof parsed.hardwareOpen === "boolean") {
+        hardwareOpen = parsed.hardwareOpen;
       }
     } catch {
       localStorage.removeItem(settingsKey);
@@ -536,7 +674,10 @@
   }
 
   function buildGraphScale(series: GraphSeries[]): GraphScale {
-    const values = series.flatMap((item) => item.points.map((point) => point.bytes));
+    const values = [
+      ...series.flatMap((item) => item.points.map((point) => point.bytes)),
+      ...(vllmVramBytes > 0 ? [vllmVramBytes] : []),
+    ];
     const minValue = values.length > 0 ? Math.min(...values) : 0;
     const maxValue = values.length > 0 ? Math.max(...values) : 1;
     const rawRange = maxValue - minValue;
@@ -562,13 +703,10 @@
         points: contextStops(sequenceLength).map((context) => {
           const kvBytes = calculateKvAtContext(model.result, context);
           const weightBytes = weightBytesFor(model.result);
-          const overheadBytes = runtimeOverheadBytes(kvBytes, weightBytes);
-
           return {
             context,
             kvBytes,
             weightBytes,
-            overheadBytes,
             bytes: graphBytes(kvBytes, weightBytes),
           };
         }),
@@ -593,7 +731,6 @@
       .map((model, index) => {
         const kvBytes = calculateKvAtContext(model.result, context);
         const weightBytes = weightBytesFor(model.result);
-        const overheadBytes = runtimeOverheadBytes(kvBytes, weightBytes);
         const bytes = graphBytes(kvBytes, weightBytes);
 
         return {
@@ -601,7 +738,6 @@
           color: palette[index % palette.length],
           kvBytes,
           weightBytes,
-          overheadBytes,
           bytes,
           y: pointToY(bytes),
         };
@@ -688,119 +824,220 @@
     </section>
 
     <section class="processed-panel">
-      <div class="section-head">
-        <h2>Models</h2>
-        <span>{selectedModels.length} selected</span>
-      </div>
+      <details
+        class="panel-details"
+        open={modelsOpen}
+        ontoggle={(event) => {
+          modelsOpen = (event.currentTarget as HTMLDetailsElement).open;
+          saveSettings();
+        }}
+      >
+        <summary>
+          <span>Models</span>
+          <strong>{selectedModels.length} selected / {processedModels.length} total</strong>
+        </summary>
 
-      {#if processedModels.length === 0}
+        <div class="panel-body">
+          {#if processedModels.length === 0}
             <p class="empty">Add a Hugging Face model to begin comparing total VRAM footprint growth.</p>
-      {:else}
-        <div class="model-strip">
-          {#each processedModels as model}
-            <div class:selected={model.selected} class:error-chip={Boolean(model.error)} class="model-chip">
-              <button class="model-select" type="button" onclick={() => toggleModel(model.id)}>
-                <strong>{modelName(model.id)}</strong>
-                <span>{model.loading ? "loading" : model.error ? "error" : model.id}</span>
-              </button>
-              <button class="remove" type="button" aria-label={`Remove ${model.id}`} onclick={() => removeModel(model.id)}>
-                x
-              </button>
+          {:else}
+            <div class="model-strip">
+              {#each processedModels as model}
+                <div class:selected={model.selected} class:error-chip={Boolean(model.error)} class="model-chip">
+                  <button class="model-select" type="button" onclick={() => toggleModel(model.id)}>
+                    <strong>{modelName(model.id)}</strong>
+                    <span>{model.loading ? "loading" : model.error ? "error" : model.id}</span>
+                  </button>
+                  <button class="remove" type="button" aria-label={`Remove ${model.id}`} onclick={() => removeModel(model.id)}>
+                    x
+                  </button>
+                </div>
+              {/each}
             </div>
-          {/each}
+          {/if}
         </div>
-      {/if}
+      </details>
     </section>
 
     <section class="config-panel">
-      <div class="config-grid">
-        <label title="Maximum token context to evaluate on the graph.">
-          <span title="Maximum token context to evaluate on the graph.">Context Size</span>
-          <input
-            min="1"
-            step="1024"
-            title="Maximum token context to evaluate on the graph."
-            type="number"
-            value={sequenceLength}
-            oninput={(event) => updateSequenceLength((event.currentTarget as HTMLInputElement).valueAsNumber)}
-          />
-        </label>
-        <label title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">
-          <span title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">Batches</span>
-          <input
-            min="1"
-            title="Batch count multiplies KV cache memory because each sequence keeps its own cache."
-            type="number"
-            value={batchSize}
-            oninput={(event) => updateBatchSize((event.currentTarget as HTMLInputElement).valueAsNumber)}
-          />
-        </label>
-        <div class="field">
-          <span title="Precision used for KV cache tensors.">KV bits</span>
-          <div class="precision-grid">
-            {#each kvPrecisionOptions as option}
-              <button
-                class:active={precision === option.id}
-                title={`Use ${option.label}-bit precision for KV cache tensors.`}
-                type="button"
-                onclick={() => {
-                  precision = option.id;
-                  saveSettings();
-                }}
-              >
-                {option.label}
-              </button>
-            {/each}
+      <details
+        class="panel-details"
+        open={configOpen}
+        ontoggle={(event) => {
+          configOpen = (event.currentTarget as HTMLDetailsElement).open;
+          saveSettings();
+        }}
+      >
+        <summary>
+          <span>Config</span>
+          <strong>{formatInteger(sequenceLength)} ctx / {batchSize} batch / {precision}</strong>
+        </summary>
+
+        <div class="config-grid panel-body">
+          <label title="Maximum token context to evaluate on the graph.">
+            <span title="Maximum token context to evaluate on the graph.">Context Size</span>
+            <input
+              min="1"
+              step="1024"
+              title="Maximum token context to evaluate on the graph."
+              type="number"
+              value={sequenceLength}
+              oninput={(event) => updateSequenceLength((event.currentTarget as HTMLInputElement).valueAsNumber)}
+            />
+          </label>
+          <label title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">
+            <span title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">Batches</span>
+            <input
+              min="1"
+              title="Batch count multiplies KV cache memory because each sequence keeps its own cache."
+              type="number"
+              value={batchSize}
+              oninput={(event) => updateBatchSize((event.currentTarget as HTMLInputElement).valueAsNumber)}
+            />
+          </label>
+          <div class="field">
+            <span title="Precision used for KV cache tensors.">KV bits</span>
+            <div class="precision-grid">
+              {#each kvPrecisionOptions as option}
+                <button
+                  class:active={precision === option.id}
+                  title={`Use ${option.label}-bit precision for KV cache tensors.`}
+                  type="button"
+                  onclick={() => {
+                    precision = option.id;
+                    saveSettings();
+                  }}
+                >
+                  {option.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="field">
+            <span title="Quantization or precision used to estimate model-weight memory.">Weights bits</span>
+            <div class="precision-grid">
+              {#each weightPrecisionOptions as option}
+                <button
+                  class:active={weightPrecision === option.id}
+                  title={`Estimate model weights at ${option.label}-bit precision.`}
+                  type="button"
+                  onclick={() => {
+                    weightPrecision = option.id;
+                    saveSettings();
+                  }}
+                >
+                  {option.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="field">
+            <span title="Choose which memory components are summed into the graph line.">Graph</span>
+            <div class="mode-switch">
+              <button class:active={graphComponents.kv} title="Include KV cache memory in the graph." type="button" onclick={() => toggleGraphComponent("kv")}>KV</button>
+              <button class:active={graphComponents.weights} title="Include estimated model-weight memory in the graph." type="button" onclick={() => toggleGraphComponent("weights")}>Weights</button>
+            </div>
           </div>
         </div>
-        <div class="field">
-          <span title="Quantization or precision used to estimate model-weight memory.">Weights bits</span>
-          <div class="precision-grid">
-            {#each weightPrecisionOptions as option}
-              <button
-                class:active={weightPrecision === option.id}
-                title={`Estimate model weights at ${option.label}-bit precision.`}
-                type="button"
-                onclick={() => {
-                  weightPrecision = option.id;
-                  saveSettings();
-                }}
-              >
-                {option.label}
-              </button>
-            {/each}
+      </details>
+    </section>
+
+    <section class="hardware-panel">
+      <details
+        class="hardware-details"
+        open={hardwareOpen}
+        ontoggle={(event) => {
+          hardwareOpen = (event.currentTarget as HTMLDetailsElement).open;
+          saveSettings();
+        }}
+      >
+        <summary>
+          <span>vLLM & GPUs</span>
+          <strong>{(vllmGpuMemoryUtilization * 100).toFixed(0)}% / {hardwareSummaryLabel()}</strong>
+        </summary>
+
+        <div class="hardware-body">
+          <div class="vllm-picker">
+            <span title="vLLM calls this --gpu-memory-utilization. It is the fraction of GPU memory used for the model executor in this vLLM instance.">vLLM gpu_memory_utilization</span>
+            <label class="utilization-field">
+              <input
+                min="1"
+                max="100"
+                step="1"
+                type="number"
+                value={Math.round(vllmGpuMemoryUtilization * 100)}
+                oninput={(event) => updateVllmGpuMemoryUtilization((event.currentTarget as HTMLInputElement).valueAsNumber)}
+              />
+              <span>%</span>
+            </label>
+            <p>Default vLLM is 92%. Higher values such as 95% can work when the GPU is dedicated to one vLLM instance, but leave less room for CUDA graphs, kernels, drivers, and fragmentation.</p>
           </div>
-        </div>
-        <div class="field">
-          <span title="Choose which memory components are summed into the graph line.">Graph</span>
-          <div class="mode-switch">
-            <button class:active={graphComponents.kv} title="Include KV cache memory in the graph." type="button" onclick={() => toggleGraphComponent("kv")}>KV</button>
-            <button class:active={graphComponents.weights} title="Include estimated model-weight memory in the graph." type="button" onclick={() => toggleGraphComponent("weights")}>Weights</button>
-            <button class:active={graphComponents.runtime} title="Include the selected runtime overhead estimate in the graph." type="button" onclick={() => toggleGraphComponent("runtime")}>Runtime</button>
+
+          <div class="gpu-builder">
+            <label>
+              <span>GPU</span>
+              <select bind:value={selectedGpuId}>
+                {#each gpuFamilies as family}
+                  <optgroup label={gpuFamilyLabels[family]}>
+                    {#each gpuOptionsForFamily(family) as gpu}
+                      <option value={gpu.id}>{gpu.name} / {gpu.memoryGb} GB</option>
+                    {/each}
+                  </optgroup>
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span>Count</span>
+              <input
+                min="1"
+                max="16"
+                type="number"
+                value={selectedGpuQuantity}
+                oninput={(event) => updateSelectedGpuQuantity((event.currentTarget as HTMLInputElement).valueAsNumber)}
+              />
+            </label>
+            <button type="button" onclick={addGpuSelection}>Add GPU</button>
           </div>
-        </div>
-        <div class="field">
-          <span title="Optional inference runtime overhead applied as a percentage of KV plus weights.">Overhead</span>
-          <div class="overhead-grid">
-            {#each runtimeOverheadOptions as option}
-              <button
-                class:active={runtimeOverhead === option.id}
-                disabled={!graphComponents.runtime}
-                title={graphComponents.runtime
-                  ? `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`
-                  : "Enable Runtime in Graph to use overhead presets."}
-                type="button"
-                onclick={() => {
-                  runtimeOverhead = option.id;
-                  saveSettings();
-                }}
-              >
-                {option.label}
-              </button>
-            {/each}
+
+          {#if gpuSelections.length === 0}
+            <p class="empty">Add GPUs to compare selected models against vLLM VRAM.</p>
+          {:else}
+            <div class="gpu-list">
+              {#each gpuSelections as selection}
+                <div class="gpu-row">
+                  <strong>{gpuSelectionLabel(selection)}</strong>
+                  <span>{formatBytes(gpuSelectionBytes(selection), "gb")}</span>
+                  <div class="gpu-actions" aria-label={`Adjust ${gpuSelectionLabel(selection)}`}>
+                    <button type="button" onclick={() => setGpuSelectionQuantity(selection.gpuId, selection.quantity - 1)}>-</button>
+                    <button type="button" onclick={() => setGpuSelectionQuantity(selection.gpuId, selection.quantity + 1)}>+</button>
+                    <button type="button" onclick={() => removeGpuSelection(selection.gpuId)}>x</button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <div class="hardware-summary">
+            <div>
+              <span>raw VRAM</span>
+              <strong title="Decimal GB / binary GiB">{formatBytesBoth(totalGpuVramBytes)}</strong>
+            </div>
+            <div title="vLLM tensor parallel fit is limited by the smallest selected GPU times GPU count times gpu_memory_utilization.">
+              <span>vLLM VRAM</span>
+              <strong title="Decimal GB / binary GiB">{formatBytesBoth(vllmVramBytes)}</strong>
+            </div>
+            <div title="Directly maps to vLLM --gpu-memory-utilization.">
+              <span>vLLM %</span>
+              <strong>{(vllmGpuMemoryUtilization * 100).toFixed(0)}%</strong>
+            </div>
+            <div>
+              <span>context</span>
+              <strong>{formatInteger(sequenceLength)}</strong>
+            </div>
           </div>
+
         </div>
-      </div>
+      </details>
     </section>
 
     <section class="tabs-panel">
@@ -837,6 +1074,14 @@
                 <line x1="48" x2="760" y1="300" y2="300" />
                 <line x1="48" x2="48" y1="38" y2="300" />
                 <text x="760" y="34" text-anchor="end">{graphModeLabel()}</text>
+                {#if vllmVramBytes > 0}
+                  <line class="capacity-line" x1="48" x2="760" y1={pointToY(vllmVramBytes)} y2={pointToY(vllmVramBytes)}>
+                    <title>vLLM VRAM {formatBytes(vllmVramBytes, "gib")}</title>
+                  </line>
+                  <text class="capacity-label" x="754" y={pointToY(vllmVramBytes) - 7} text-anchor="end">
+                    vLLM VRAM {formatBytes(vllmVramBytes, "gib")}
+                  </text>
+                {/if}
                 {#each graphSeries as series}
                   <path d={linePath(series.points)} stroke={series.color} />
                   {#each series.points as point}
@@ -870,9 +1115,6 @@
                       {/if}
                       {#if graphComponents.weights}
                         <span>weights {formatBytes(item.weightBytes, "gib")}</span>
-                      {/if}
-                      {#if graphComponents.runtime}
-                        <span>runtime {formatBytes(item.overheadBytes, "gib")}</span>
                       {/if}
                     </div>
                   {/each}
@@ -959,7 +1201,6 @@
   }
 
   h1,
-  h2,
   h3,
   p {
     margin: 0;
@@ -1002,12 +1243,6 @@
     line-height: 1.35;
   }
 
-  h2 {
-    font-size: 14px;
-    font-weight: 750;
-    line-height: 1.2;
-  }
-
   h3 {
     min-width: 0;
     overflow: hidden;
@@ -1020,6 +1255,7 @@
   .picker-panel,
   .processed-panel,
   .config-panel,
+  .hardware-panel,
   .tabs-panel {
     margin-top: 16px;
     border: 1px solid var(--line);
@@ -1028,12 +1264,9 @@
 
   .picker-panel,
   .processed-panel,
-  .config-panel {
+  .config-panel,
+  .hardware-panel {
     padding: 16px;
-  }
-
-  .config-panel {
-    padding: 10px 12px;
   }
 
   .picker {
@@ -1107,16 +1340,19 @@
   }
 
   input,
+  select,
   button {
     border-radius: 0;
     font: inherit;
   }
 
   input,
+  select,
   .picker > button,
   .precision-grid button,
-  .overhead-grid button,
   .mode-switch button,
+  .gpu-builder > button,
+  .gpu-actions button,
   .tabs button {
     min-height: 44px;
     border: 1px solid rgb(17 17 17 / 15%);
@@ -1127,7 +1363,6 @@
 
   .config-panel input,
   .config-panel .precision-grid button,
-  .config-panel .overhead-grid button,
   .config-panel .mode-switch button {
     min-height: 30px;
   }
@@ -1140,7 +1375,15 @@
     font-size: 14px;
   }
 
-  input:focus {
+  select {
+    width: 100%;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  input:focus,
+  select:focus {
     border-color: var(--ink);
   }
 
@@ -1154,15 +1397,15 @@
 
   .picker > button,
   .precision-grid button,
-  .overhead-grid button,
   .mode-switch button,
+  .gpu-builder > button,
+  .gpu-actions button,
   .tabs button {
     padding: 0 14px;
     font-weight: 750;
   }
 
   .config-panel .precision-grid button,
-  .config-panel .overhead-grid button,
   .config-panel .mode-switch button {
     padding: 0 8px;
     font-size: 13px;
@@ -1171,10 +1414,10 @@
   .picker > button:hover,
   .precision-grid button:hover,
   .precision-grid button.active,
-  .overhead-grid button:hover:not(:disabled),
-  .overhead-grid button.active,
   .mode-switch button:hover,
   .mode-switch button.active,
+  .gpu-builder > button:hover,
+  .gpu-actions button:hover,
   .tabs button:hover,
   .tabs button.active {
     border-color: var(--ink);
@@ -1182,13 +1425,6 @@
     color: white;
   }
 
-  .overhead-grid button:disabled {
-    border-color: rgb(17 17 17 / 8%);
-    background: rgb(17 17 17 / 3%);
-    color: rgb(17 17 17 / 28%);
-  }
-
-  .section-head,
   .card-head {
     display: flex;
     align-items: center;
@@ -1196,7 +1432,6 @@
     gap: 12px;
   }
 
-  .section-head span,
   .card-head span {
     flex: none;
     color: rgb(17 17 17 / 50%);
@@ -1272,7 +1507,6 @@
   }
 
   .precision-grid,
-  .overhead-grid,
   .mode-switch,
   .info-grid {
     display: grid;
@@ -1312,7 +1546,6 @@
   }
 
   .config-grid .precision-grid,
-  .config-grid .overhead-grid,
   .config-grid .mode-switch {
     grid-row: 2;
   }
@@ -1330,24 +1563,187 @@
     gap: 6px;
   }
 
-  .overhead-grid {
-    display: flex;
-    gap: 6px;
-  }
-
   .precision-grid button {
     width: 34px;
-    padding: 0;
-  }
-
-  .overhead-grid button {
-    width: 42px;
     padding: 0;
   }
 
   .mode-switch {
     display: flex;
     gap: 6px;
+  }
+
+  .panel-details summary,
+  .hardware-details summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 14px;
+    font-weight: 750;
+  }
+
+  .panel-details summary::-webkit-details-marker,
+  .hardware-details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .panel-details summary::before,
+  .hardware-details summary::before {
+    content: "+";
+    width: 20px;
+    color: rgb(17 17 17 / 45%);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  .panel-details[open] summary::before,
+  .hardware-details[open] summary::before {
+    content: "-";
+  }
+
+  .panel-details summary span,
+  .hardware-details summary span {
+    margin-right: auto;
+  }
+
+  .panel-details summary strong,
+  .hardware-details summary strong {
+    min-width: 0;
+    overflow: hidden;
+    color: rgb(17 17 17 / 55%);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .panel-body {
+    padding-top: 12px;
+  }
+
+  .hardware-body {
+    display: grid;
+    gap: 12px;
+    padding-top: 14px;
+  }
+
+  .vllm-picker {
+    display: grid;
+    gap: 8px;
+  }
+
+  .vllm-picker > span,
+  .gpu-builder span {
+    font-size: 13px;
+    font-weight: 750;
+  }
+
+  .vllm-picker p {
+    color: rgb(17 17 17 / 55%);
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .utilization-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .utilization-field input {
+    max-width: 120px;
+  }
+
+  .utilization-field span {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 13px;
+  }
+
+  .gpu-builder {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 74px auto;
+    align-items: end;
+    gap: 8px;
+  }
+
+  .gpu-builder > button {
+    min-width: 94px;
+    padding-inline: 12px;
+  }
+
+  .gpu-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .gpu-row,
+  .hardware-summary {
+    border: 1px solid var(--line);
+    background: var(--paper);
+  }
+
+  .gpu-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+  }
+
+  .gpu-row strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .gpu-row span,
+  .hardware-summary span {
+    color: rgb(17 17 17 / 50%);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 11px;
+  }
+
+  .gpu-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .gpu-actions button {
+    width: 30px;
+    min-height: 30px;
+    padding: 0;
+  }
+
+  .hardware-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .hardware-summary div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 10px;
+    border-right: 1px solid var(--line);
+  }
+
+  .hardware-summary div:last-child {
+    border-right: 0;
+  }
+
+  .hardware-summary strong {
+    min-width: 0;
+    overflow: hidden;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .config-panel .mode-switch button {
@@ -1395,6 +1791,17 @@
   .graph .hover-line {
     stroke: rgb(17 17 17 / 45%);
     stroke-dasharray: 4 4;
+  }
+
+  .graph .capacity-line {
+    stroke: rgb(21 128 61 / 78%);
+    stroke-dasharray: 7 5;
+    stroke-width: 2;
+  }
+
+  .graph .capacity-label {
+    fill: rgb(21 128 61 / 85%);
+    font-weight: 700;
   }
 
   .graph .hover-dot {

@@ -95,6 +95,26 @@ function buildLayers(
   });
 }
 
+function buildPatternedLayers(
+  layerCount: number,
+  slidingWindow: number,
+  slidingWindowPattern: number,
+  orderOfInterleavedLayers: string | undefined,
+): NormalizedLayer[] {
+  const localAttentionFirst = orderOfInterleavedLayers !== "global_attn_first";
+
+  return Array.from({ length: layerCount }, (_, index) => {
+    const position = index % slidingWindowPattern;
+    const isGlobal = localAttentionFirst ? position === slidingWindowPattern - 1 : position === 0;
+
+    return {
+      index,
+      attention: isGlobal ? "full" : "sliding",
+      windowSize: isGlobal ? undefined : slidingWindow,
+    };
+  });
+}
+
 function hasMlaFields(config: RawModelConfig): boolean {
   return (
     typeof config.kv_lora_rank === "number" ||
@@ -105,6 +125,23 @@ function hasMlaFields(config: RawModelConfig): boolean {
 }
 
 function buildCacheStrategy(config: RawModelConfig, modelType: string | undefined): CacheStrategy {
+  if (modelType === "gemma4_text") {
+    const slidingKeyValueHeads = readNumber(config, "num_key_value_heads");
+    const fullKeyValueHeads = readNumber(config, "num_global_key_value_heads") ?? slidingKeyValueHeads;
+    const fullHeadDim = readNumber(config, "global_head_dim");
+    const slidingHeadDim = readNumber(config, "head_dim");
+
+    if (fullKeyValueHeads && fullHeadDim && slidingKeyValueHeads && slidingHeadDim) {
+      return {
+        kind: "gemma4_hybrid",
+        fullKeyValueHeads,
+        fullHeadDim,
+        slidingKeyValueHeads,
+        slidingHeadDim,
+      };
+    }
+  }
+
   if (modelType === "deepseek_v4") {
     const layerCount = readNumber(config, "num_hidden_layers");
     const headDim = readNumber(config, "head_dim");
@@ -144,21 +181,22 @@ function buildCacheStrategy(config: RawModelConfig, modelType: string | undefine
     }
   }
 
-  if (modelType === "glm_moe_dsa") {
+  if (modelType === "glm_moe_dsa" || modelType === "deepseek_v32") {
     const kvLoraRank = readNumber(config, "kv_lora_rank");
     const qkRopeHeadDim = readNumber(config, "qk_rope_head_dim");
     const indexHeadDim = readNumber(config, "index_head_dim");
 
     if (kvLoraRank && qkRopeHeadDim && indexHeadDim) {
       return {
-        kind: "glm_moe_dsa_compressed",
+        kind: "dsa_mla_compressed",
         kvLoraRank,
         qkRopeHeadDim,
         indexHeadDim,
       };
     }
   }
-if (modelType === "mamba2") {
+
+  if (modelType === "mamba2") {
     const hiddenSize = readNumber(config, "hidden_size") ?? 0;
     const expand = readNumber(config, "expand") ?? 2;
     const intermediateSize = readNumber(config, "intermediate_size") ?? hiddenSize * expand;
@@ -229,6 +267,8 @@ export function normalizeConfig(
   const explicitKvHeads = readNumber(config, "num_key_value_heads");
   const configuredHeadDim = readNumber(config, "head_dim");
   const slidingWindow = readNumber(config, "sliding_window");
+  const slidingWindowPattern = readNumber(config, "sliding_window_pattern");
+  const orderOfInterleavedLayers = readString(config, "order_of_interleaved_layers");
   const layerTypes = readStringArray(config, "layer_types");
   const architectures = readStringArray(config, "architectures");
   const modelType = readString(config, "model_type");
@@ -247,9 +287,9 @@ export function normalizeConfig(
     unsupportedReasons.push("MLA/compressed-cache architecture detected but missing required fields (kv_lora_rank + qk_rope_head_dim).");
   }
 
-  if (cacheStrategy.kind === "glm_moe_dsa_compressed") {
+  if (cacheStrategy.kind === "dsa_mla_compressed") {
     warnings.push(
-      "GLM MoE DSA uses an optimized compressed MLA cache plus a per-layer DSA indexer key cache.",
+      "DSA/MLA models use an optimized compressed MLA cache plus a per-layer DSA indexer key cache.",
     );
   }
 
@@ -262,6 +302,12 @@ export function normalizeConfig(
   if (cacheStrategy.kind === "qwen3_5_moe_hybrid") {
     warnings.push(
       "Qwen3.5/Qwen3.6 hybrid attention uses normal K/V for full-attention layers plus fixed linear-attention convolution and recurrent states.",
+    );
+  }
+
+  if (cacheStrategy.kind === "gemma4_hybrid") {
+    warnings.push(
+      "Gemma 4 uses separate full-attention and sliding-attention KV dimensions. When num_global_key_value_heads is absent, kvanta uses num_key_value_heads with global_head_dim for full-attention layers.",
     );
   }
 
@@ -287,7 +333,7 @@ export function normalizeConfig(
 
   const isMambaStrategy =
     cacheStrategy.kind === "mamba_ssm" || cacheStrategy.kind === "mamba2_ssm";
-  const isMlaStrategy = cacheStrategy.kind === "mla_compressed";
+  const isMlaStrategy = cacheStrategy.kind === "mla_compressed" || cacheStrategy.kind === "dsa_mla_compressed";
   const headDimOptional = isMambaStrategy || isMlaStrategy;
 
   if (!numAttentionHeads && !isMambaStrategy) {
@@ -312,11 +358,17 @@ export function normalizeConfig(
   }
 
   if (slidingWindow && layerTypes.length === 0) {
-    warnings.push("sliding_window is set and no layer_types array was found; applying the window to every layer.");
+    if (slidingWindowPattern && slidingWindowPattern > 1) {
+      warnings.push("sliding_window_pattern is set; using patterned local/global attention layers.");
+    } else {
+      warnings.push("sliding_window is set and no layer_types array was found; applying the window to every layer.");
+    }
   }
 
   const forcedLayerKind: AttentionKind | undefined = isMambaStrategy ? "recurrent" : undefined;
-  const layers = buildLayers(numHiddenLayers ?? 0, slidingWindow, layerTypes, forcedLayerKind);
+  const layers = slidingWindow && slidingWindowPattern && slidingWindowPattern > 1 && layerTypes.length === 0 && !forcedLayerKind
+    ? buildPatternedLayers(numHiddenLayers ?? 0, slidingWindow, slidingWindowPattern, orderOfInterleavedLayers)
+    : buildLayers(numHiddenLayers ?? 0, slidingWindow, layerTypes, forcedLayerKind);
 
   return {
     modelId: options.modelId,
