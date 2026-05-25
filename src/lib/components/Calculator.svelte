@@ -664,7 +664,12 @@
             {#each runtimeOverheadOptions as option}
               <button
                 class:active={runtimeOverhead === option.id}
-                title={option.percent === 0 ? "Do not add runtime overhead." : `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`}
+                disabled={!graphComponents.runtime}
+                title={graphComponents.runtime
+                  ? option.percent === 0
+                    ? "Do not add runtime overhead."
+                    : `Add ${(option.percent * 100).toFixed(0)}% runtime overhead when Runtime is selected.`
+                  : "Enable Runtime in Graph to use overhead presets."}
                 type="button"
                 onclick={() => {
                   runtimeOverhead = option.id;
@@ -1023,6 +1028,10 @@
     cursor: pointer;
   }
 
+  button:disabled {
+    cursor: not-allowed;
+  }
+
   .picker > button,
   .precision-grid button,
   .overhead-grid button,
@@ -1042,7 +1051,7 @@
   .picker > button:hover,
   .precision-grid button:hover,
   .precision-grid button.active,
-  .overhead-grid button:hover,
+  .overhead-grid button:hover:not(:disabled),
   .overhead-grid button.active,
   .mode-switch button:hover,
   .mode-switch button.active,
@@ -1051,6 +1060,12 @@
     border-color: var(--ink);
     background: var(--ink);
     color: white;
+  }
+
+  .overhead-grid button:disabled {
+    border-color: rgb(17 17 17 / 8%);
+    background: rgb(17 17 17 / 3%);
+    color: rgb(17 17 17 / 28%);
   }
 
   .section-head,
