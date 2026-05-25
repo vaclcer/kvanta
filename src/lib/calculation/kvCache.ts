@@ -108,6 +108,53 @@ export function calculateKvCache({
       };
     }
 
+    if (model.cacheStrategy.kind === "mla_compressed") {
+      const perTokenElements =
+        model.cacheStrategy.kvLoraRank + model.cacheStrategy.qkRopeHeadDim;
+      const latentBytes = batchSize * tokens * model.cacheStrategy.kvLoraRank * precisionBytes;
+      const ropeBytes = batchSize * tokens * model.cacheStrategy.qkRopeHeadDim * precisionBytes;
+      const bytes = batchSize * tokens * perTokenElements * precisionBytes;
+
+      return {
+        index: layer.index,
+        attention: layer.attention,
+        tokens,
+        bytes,
+        components: { latentBytes, ropeBytes },
+      };
+    }
+
+    if (model.cacheStrategy.kind === "mamba_ssm") {
+      const cs = model.cacheStrategy;
+      const convBytes = batchSize * cs.intermediateSize * cs.convKernel * precisionBytes;
+      const ssmBytes =
+        batchSize * cs.intermediateSize * cs.stateSize * cs.recurrentBytesPerElement;
+
+      return {
+        index: layer.index,
+        attention: layer.attention,
+        tokens: 1,
+        bytes: convBytes + ssmBytes,
+        components: { convBytes, ssmBytes },
+      };
+    }
+
+    if (model.cacheStrategy.kind === "mamba2_ssm") {
+      const cs = model.cacheStrategy;
+      const convElements = cs.intermediateSize + 2 * cs.nGroups * cs.stateSize;
+      const convBytes = batchSize * convElements * cs.convKernel * precisionBytes;
+      const ssmBytes =
+        batchSize * cs.numHeads * cs.headDim * cs.stateSize * cs.recurrentBytesPerElement;
+
+      return {
+        index: layer.index,
+        attention: layer.attention,
+        tokens: 1,
+        bytes: convBytes + ssmBytes,
+        components: { convBytes, ssmBytes },
+      };
+    }
+
     const bytes = batchSize * tokens * model.numKeyValueHeads * model.headDim * 2 * precisionBytes;
 
     return {
@@ -153,6 +200,24 @@ export function calculateKvCache({
               `Full-attention layers store normal key/value tensors.`,
               `Linear-attention layers store a fixed convolution state at ${precision} plus an FP32 recurrent state.`,
             ]
+        : model.cacheStrategy.kind === "mla_compressed"
+          ? [
+              `MLA compressed cache stores kv_lora_rank (${model.cacheStrategy.kvLoraRank}) + qk_rope_head_dim (${model.cacheStrategy.qkRopeHeadDim}) elements per token per layer.`,
+              `KV precision ${precision} uses ${precisionBytes} bytes per element.`,
+              `Matches vLLM / SGLang / TensorRT-LLM compressed-cache storage.`,
+            ]
+          : model.cacheStrategy.kind === "mamba_ssm"
+            ? [
+                `Mamba SSM cache is fixed-size per layer and does not grow with sequence length.`,
+                `Conv state: intermediate_size × conv_kernel at ${precision}.`,
+                `SSM state: intermediate_size × state_size in FP32.`,
+              ]
+            : model.cacheStrategy.kind === "mamba2_ssm"
+              ? [
+                  `Mamba2 SSM cache is fixed-size per layer and does not grow with sequence length.`,
+                  `Conv state: (intermediate_size + 2 × n_groups × state_size) × conv_kernel at ${precision}.`,
+                  `SSM state: num_heads × head_dim × state_size in FP32.`,
+                ]
         : [
             `KV cache stores both key and value tensors, so the formula includes a factor of 2.`,
             `Precision ${precision} uses ${precisionBytes} bytes per KV element.`,

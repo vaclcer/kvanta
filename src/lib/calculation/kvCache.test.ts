@@ -182,7 +182,33 @@ describe("calculateKvCache", () => {
     expect(result.totalBytes).toBe(36 * linearLayerBytes + 12 * fullLayerBytes);
   });
 
-  it("rejects MLA configs until an exact adapter exists", () => {
+  it("calculates MLA compressed cache (DeepSeek-V3 style)", () => {
+    const model = normalize({
+      model_type: "deepseek_v3",
+      hidden_size: 7168,
+      num_hidden_layers: 61,
+      num_attention_heads: 128,
+      kv_lora_rank: 512,
+      qk_rope_head_dim: 64,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 4096,
+      batchSize: 1,
+      precision: "float16",
+    });
+
+    expect(result.model.cacheStrategy.kind).toBe("mla_compressed");
+    // per layer per token: (512 + 64) * 2 = 1152 bytes
+    expect(result.totalBytes).toBe(61 * 4096 * 1152);
+    expect(result.layerBreakdown[0].components).toEqual({
+      latentBytes: 4096 * 512 * 2,
+      ropeBytes: 4096 * 64 * 2,
+    });
+  });
+
+  it("auto-detects MLA from kv_lora_rank + qk_rope_head_dim even without model_type", () => {
     const model = normalize({
       hidden_size: 7168,
       num_hidden_layers: 61,
@@ -191,13 +217,89 @@ describe("calculateKvCache", () => {
       qk_rope_head_dim: 64,
     });
 
-    expect(() =>
-      calculateKvCache({
-        model,
-        sequenceLength: 4096,
-        batchSize: 1,
-        precision: "float8",
-      }),
-    ).toThrow("MLA/compressed-cache architecture detected");
+    expect(model.cacheStrategy.kind).toBe("mla_compressed");
+    expect(model.unsupportedReasons).toEqual([]);
+  });
+
+  it("calculates Mamba SSM fixed per-layer state independent of sequence length", () => {
+    const model = normalize({
+      model_type: "mamba",
+      hidden_size: 2560,
+      num_hidden_layers: 64,
+      intermediate_size: 5120,
+      state_size: 16,
+      conv_kernel: 4,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 8192,
+      batchSize: 1,
+      precision: "float16",
+    });
+    const convBytes = 5120 * 4 * 2;
+    const ssmBytes = 5120 * 16 * 4;
+    const perLayer = convBytes + ssmBytes;
+
+    expect(result.model.cacheStrategy.kind).toBe("mamba_ssm");
+    expect(result.layerBreakdown[0].components).toEqual({ convBytes, ssmBytes });
+    expect(result.layerBreakdown[0].attention).toBe("recurrent");
+    expect(result.totalBytes).toBe(64 * perLayer);
+
+    const longer = calculateKvCache({
+      model,
+      sequenceLength: 65536,
+      batchSize: 1,
+      precision: "float16",
+    });
+    expect(longer.totalBytes).toBe(result.totalBytes);
+  });
+
+  it("calculates Mamba2 SSM cache with BC projections in the conv state", () => {
+    const model = normalize({
+      model_type: "mamba2",
+      hidden_size: 4096,
+      num_hidden_layers: 48,
+      intermediate_size: 8192,
+      state_size: 128,
+      conv_kernel: 4,
+      num_heads: 64,
+      head_dim: 64,
+      n_groups: 8,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 4096,
+      batchSize: 2,
+      precision: "bfloat16",
+    });
+    const convElements = 8192 + 2 * 8 * 128;
+    const convBytes = 2 * convElements * 4 * 2;
+    const ssmBytes = 2 * 64 * 64 * 128 * 4;
+    const perLayer = convBytes + ssmBytes;
+
+    expect(result.model.cacheStrategy.kind).toBe("mamba2_ssm");
+    expect(result.layerBreakdown[0].components).toEqual({ convBytes, ssmBytes });
+    expect(result.totalBytes).toBe(48 * perLayer);
+  });
+
+  it("locks Llama-3-8B canonical KV cache value", () => {
+    const model = normalize({
+      hidden_size: 4096,
+      num_hidden_layers: 32,
+      num_attention_heads: 32,
+      num_key_value_heads: 8,
+      head_dim: 128,
+    });
+
+    const result = calculateKvCache({
+      model,
+      sequenceLength: 4096,
+      batchSize: 1,
+      precision: "float16",
+    });
+
+    expect(result.totalBytes).toBe(536_870_912);
   });
 });

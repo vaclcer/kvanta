@@ -64,6 +64,10 @@ function inferLayerKind(layerType: string | undefined, hasSlidingWindow: boolean
 
   const normalized = layerType.toLowerCase();
 
+  if (normalized.includes("mamba") || normalized.includes("recurrent") || normalized.includes("ssm")) {
+    return "recurrent";
+  }
+
   if (normalized.includes("sliding") || normalized.includes("local")) {
     return "sliding";
   }
@@ -79,9 +83,10 @@ function buildLayers(
   layerCount: number,
   slidingWindow: number | undefined,
   layerTypes: string[],
+  forcedKind?: AttentionKind,
 ): NormalizedLayer[] {
   return Array.from({ length: layerCount }, (_, index) => {
-    const attention = inferLayerKind(layerTypes[index], Boolean(slidingWindow));
+    const attention = forcedKind ?? inferLayerKind(layerTypes[index], Boolean(slidingWindow));
     return {
       index,
       attention,
@@ -153,7 +158,60 @@ function buildCacheStrategy(config: RawModelConfig, modelType: string | undefine
       };
     }
   }
+if (modelType === "mamba2") {
+    const hiddenSize = readNumber(config, "hidden_size") ?? 0;
+    const expand = readNumber(config, "expand") ?? 2;
+    const intermediateSize = readNumber(config, "intermediate_size") ?? hiddenSize * expand;
+    const stateSize = readNumber(config, "state_size") ?? 128;
+    const convKernel = readNumber(config, "conv_kernel") ?? 4;
+    const numHeads = readNumber(config, "num_heads");
+    const headDim = readNumber(config, "head_dim");
+    const nGroups = readNumber(config, "n_groups") ?? 1;
 
+    if (intermediateSize && stateSize && convKernel && numHeads && headDim) {
+      return {
+        kind: "mamba2_ssm",
+        intermediateSize,
+        stateSize,
+        convKernel,
+        numHeads,
+        headDim,
+        nGroups,
+        recurrentBytesPerElement: 4,
+      };
+    }
+  }
+
+  if (modelType === "mamba" || modelType === "falcon_mamba") {
+    const hiddenSize = readNumber(config, "hidden_size") ?? 0;
+    const expand = readNumber(config, "expand") ?? 2;
+    const intermediateSize = readNumber(config, "intermediate_size") ?? hiddenSize * expand;
+    const stateSize = readNumber(config, "state_size") ?? 16;
+    const convKernel = readNumber(config, "conv_kernel") ?? 4;
+
+    if (intermediateSize && stateSize && convKernel) {
+      return {
+        kind: "mamba_ssm",
+        intermediateSize,
+        stateSize,
+        convKernel,
+        recurrentBytesPerElement: 4,
+      };
+    }
+  }
+
+  const kvLoraRank = readNumber(config, "kv_lora_rank");
+  const qkRopeHeadDim = readNumber(config, "qk_rope_head_dim");
+
+  if (kvLoraRank && qkRopeHeadDim) {
+    return {
+      kind: "mla_compressed",
+      kvLoraRank,
+      qkRopeHeadDim,
+    };
+  }
+
+  
   return { kind: "standard" };
 }
 
@@ -181,7 +239,7 @@ export function normalizeConfig(
   }
 
   if (hasMlaFields(config) && cacheStrategy.kind === "standard") {
-    unsupportedReasons.push("MLA/compressed-cache architecture detected. Exact adapter support is required before calculating.");
+    unsupportedReasons.push("MLA/compressed-cache architecture detected but missing required fields (kv_lora_rank + qk_rope_head_dim).");
   }
 
   if (cacheStrategy.kind === "glm_moe_dsa_expanded") {
@@ -202,6 +260,18 @@ export function normalizeConfig(
     );
   }
 
+  if (cacheStrategy.kind === "mla_compressed") {
+    warnings.push(
+      "MLA compressed cache stores the latent KV vector (kv_lora_rank) plus the RoPE key (qk_rope_head_dim) per token per layer. Matches vLLM / SGLang / TensorRT-LLM compressed storage.",
+    );
+  }
+
+  if (cacheStrategy.kind === "mamba_ssm" || cacheStrategy.kind === "mamba2_ssm") {
+    warnings.push(
+      "Mamba / SSM cache is a fixed-size per-layer state that does not grow with sequence length.",
+    );
+  }
+
   if (!hiddenSize) {
     unsupportedReasons.push("Missing numeric hidden_size in Hugging Face config.");
   }
@@ -210,19 +280,24 @@ export function normalizeConfig(
     unsupportedReasons.push("Missing numeric num_hidden_layers in Hugging Face config.");
   }
 
-  if (!numAttentionHeads) {
+  const isMambaStrategy =
+    cacheStrategy.kind === "mamba_ssm" || cacheStrategy.kind === "mamba2_ssm";
+  const isMlaStrategy = cacheStrategy.kind === "mla_compressed";
+  const headDimOptional = isMambaStrategy || isMlaStrategy;
+
+  if (!numAttentionHeads && !isMambaStrategy) {
     unsupportedReasons.push("Missing numeric num_attention_heads in Hugging Face config.");
   }
 
   const numKeyValueHeads = explicitKvHeads ?? numAttentionHeads ?? 0;
 
-  if (!explicitKvHeads && numAttentionHeads) {
+  if (!explicitKvHeads && numAttentionHeads && !isMambaStrategy && !isMlaStrategy) {
     warnings.push("num_key_value_heads is missing; using num_attention_heads as the exact fallback for non-GQA models.");
   }
 
   let headDim = configuredHeadDim;
 
-  if (!headDim && hiddenSize && numAttentionHeads) {
+  if (!headDim && hiddenSize && numAttentionHeads && !headDimOptional) {
     if (hiddenSize % numAttentionHeads === 0) {
       headDim = hiddenSize / numAttentionHeads;
       warnings.push("head_dim is missing; computed hidden_size / num_attention_heads.");
@@ -235,7 +310,8 @@ export function normalizeConfig(
     warnings.push("sliding_window is set and no layer_types array was found; applying the window to every layer.");
   }
 
-  const layers = buildLayers(numHiddenLayers ?? 0, slidingWindow, layerTypes);
+  const forcedLayerKind: AttentionKind | undefined = isMambaStrategy ? "recurrent" : undefined;
+  const layers = buildLayers(numHiddenLayers ?? 0, slidingWindow, layerTypes, forcedLayerKind);
 
   return {
     modelId: options.modelId,

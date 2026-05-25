@@ -3,7 +3,7 @@ import type { WeightEstimate } from "$lib/calculation/weights";
 
 export type RawModelConfig = Record<string, unknown>;
 
-export type AttentionKind = "full" | "sliding" | "linear";
+export type AttentionKind = "full" | "sliding" | "linear" | "recurrent";
 
 export type NormalizedLayer = {
   index: number;
@@ -36,6 +36,28 @@ export type CacheStrategy =
       linearKeyHeads: number;
       linearValueHeads: number;
       linearConvKernelDim: number;
+      recurrentBytesPerElement: number;
+    }
+  | {
+      kind: "mla_compressed";
+      kvLoraRank: number;
+      qkRopeHeadDim: number;
+    }
+  | {
+      kind: "mamba_ssm";
+      intermediateSize: number;
+      stateSize: number;
+      convKernel: number;
+      recurrentBytesPerElement: number;
+    }
+  | {
+      kind: "mamba2_ssm";
+      intermediateSize: number;
+      stateSize: number;
+      convKernel: number;
+      numHeads: number;
+      headDim: number;
+      nGroups: number;
       recurrentBytesPerElement: number;
     };
 
