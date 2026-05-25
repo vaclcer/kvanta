@@ -537,8 +537,8 @@
           <span>Batches</span>
           <input min="1" type="number" bind:value={batchSize} />
         </label>
-        <fieldset>
-          <legend>KV bits</legend>
+        <div class="field">
+          <span>KV bits</span>
           <div class="precision-grid">
             {#each kvPrecisionOptions as option}
               <button
@@ -552,9 +552,9 @@
               </button>
             {/each}
           </div>
-        </fieldset>
-        <fieldset>
-          <legend>Weights bits</legend>
+        </div>
+        <div class="field">
+          <span>Weights bits</span>
           <div class="precision-grid">
             {#each weightPrecisionOptions as option}
               <button
@@ -568,14 +568,14 @@
               </button>
             {/each}
           </div>
-        </fieldset>
-        <fieldset>
-          <legend>Graph</legend>
+        </div>
+        <div class="field">
+          <span>Graph</span>
           <div class="mode-switch">
             <button class:active={graphMode === "kv"} type="button" onclick={() => (graphMode = "kv")}>KV only</button>
             <button class:active={graphMode === "total"} type="button" onclick={() => (graphMode = "total")}>KV + weights</button>
           </div>
-        </fieldset>
+        </div>
       </div>
     </section>
 
@@ -848,27 +848,16 @@
     color: rgb(255 255 255 / 68%);
   }
 
-  label,
-  fieldset {
+  label {
     display: grid;
     gap: 8px;
     min-width: 0;
   }
 
-  fieldset {
-    padding: 0;
-    border: 0;
-  }
-
-  label span,
-  legend {
+  label span {
     font-size: 14px;
     font-weight: 750;
     line-height: 1.2;
-  }
-
-  legend {
-    margin-bottom: 8px;
   }
 
   input,
@@ -1030,17 +1019,20 @@
   }
 
   .config-grid > label,
-  .config-grid > fieldset {
+  .config-grid > .field {
     display: flex;
     align-items: center;
     gap: 8px;
   }
 
   .config-grid label span,
-  .config-grid legend {
+  .config-grid .field > span {
     flex: none;
     margin: 0;
     white-space: nowrap;
+    font-size: 14px;
+    font-weight: 750;
+    line-height: 1.2;
   }
 
   .config-grid label input {
@@ -1291,8 +1283,8 @@
       gap: 18px 46px;
     }
 
-    .config-grid > fieldset {
-      flex-basis: 250px;
+    .config-grid > .field {
+      flex-basis: auto;
     }
   }
 </style>
