@@ -456,7 +456,10 @@
 <main class="shell">
   <div class="workspace">
     <header class="brand">
-      <h1 aria-label="kvanta"><span>k</span><span>v</span><span>a</span><span>n</span><span>t</span><span>a</span></h1>
+      <div class="brand-title">
+        <img class="brand-mark" src="/favicon.png" alt="" />
+        <h1 aria-label="kvanta"><span>k</span><span>v</span><span>a</span><span>n</span><span>t</span><span>a</span></h1>
+      </div>
       <p>LLM KV-cache and model-weight VRAM calculator.</p>
     </header>
 
@@ -710,6 +713,19 @@
     gap: 9px;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--line);
+  }
+
+  .brand-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border: 1px solid rgb(17 17 17 / 12%);
+    object-fit: cover;
   }
 
   h1,
