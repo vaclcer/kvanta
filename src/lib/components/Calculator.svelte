@@ -536,7 +536,7 @@
   <div class="workspace">
     <header class="brand">
       <h1 aria-label="kvanta"><span>k</span><span>v</span><span>a</span><span>n</span><span>t</span><span>a</span></h1>
-      <p>LLM KV-cache and model-weight VRAM calculator.</p>
+      <p>kvanta calculates LLM KV-cache and model-weight VRAM.</p>
     </header>
 
     <section class="picker-panel">
