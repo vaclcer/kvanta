@@ -76,8 +76,17 @@
   type GraphComponentId = "kv" | "weights" | "runtime";
   type GraphComponents = Record<GraphComponentId, boolean>;
   type RuntimeOverheadId = "lean" | "typical" | "conservative";
+  type StoredSettings = {
+    sequenceLength?: unknown;
+    batchSize?: unknown;
+    precision?: unknown;
+    weightPrecision?: unknown;
+    graphComponents?: unknown;
+    runtimeOverhead?: unknown;
+  };
 
   const processedModelsKey = "kvanta:processed-models";
+  const settingsKey = "kvanta:settings";
   const palette = ["#111111", "#2f6df6", "#d45f00", "#15803d", "#7c3aed", "#be123c"];
   const runtimeOverheadOptions: Array<{ id: RuntimeOverheadId; label: string; percent: number }> = [
     { id: "lean", label: "+5", percent: 0.05 },
@@ -141,6 +150,17 @@
     }
 
     graphComponents = { ...graphComponents, [component]: !graphComponents[component] };
+    saveSettings();
+  }
+
+  function updateSequenceLength(value: number) {
+    sequenceLength = Math.max(1, value || 1);
+    saveSettings();
+  }
+
+  function updateBatchSize(value: number) {
+    batchSize = Math.max(1, value || 1);
+    saveSettings();
   }
 
   function graphModeLabel(): string {
@@ -287,8 +307,86 @@
     return processedModels.map((model) => ({ id: model.id, selected: model.selected }));
   }
 
+  function settingsPayload() {
+    return {
+      sequenceLength,
+      batchSize,
+      precision,
+      weightPrecision,
+      graphComponents,
+      runtimeOverhead,
+    };
+  }
+
   function saveProcessedModels() {
     localStorage.setItem(processedModelsKey, JSON.stringify(storagePayload()));
+  }
+
+  function saveSettings() {
+    localStorage.setItem(settingsKey, JSON.stringify(settingsPayload()));
+  }
+
+  function isPrecisionId(value: unknown): value is PrecisionId {
+    return kvPrecisionOptions.some((option) => option.id === value) || weightPrecisionOptions.some((option) => option.id === value);
+  }
+
+  function isRuntimeOverheadId(value: unknown): value is RuntimeOverheadId {
+    return runtimeOverheadOptions.some((option) => option.id === value);
+  }
+
+  function normalizeGraphComponents(value: unknown): GraphComponents | undefined {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+
+    const source = value as Partial<Record<GraphComponentId, unknown>>;
+    const normalized = {
+      kv: source.kv === true,
+      weights: source.weights === true,
+      runtime: source.runtime === true,
+    };
+
+    return normalized.kv || normalized.weights || normalized.runtime ? normalized : undefined;
+  }
+
+  function loadSettings() {
+    const stored = localStorage.getItem(settingsKey);
+
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as StoredSettings;
+
+      if (typeof parsed.sequenceLength === "number" && Number.isFinite(parsed.sequenceLength)) {
+        sequenceLength = Math.max(1, parsed.sequenceLength);
+      }
+
+      if (typeof parsed.batchSize === "number" && Number.isFinite(parsed.batchSize)) {
+        batchSize = Math.max(1, parsed.batchSize);
+      }
+
+      if (isPrecisionId(parsed.precision)) {
+        precision = parsed.precision;
+      }
+
+      if (isPrecisionId(parsed.weightPrecision)) {
+        weightPrecision = parsed.weightPrecision;
+      }
+
+      const restoredGraphComponents = normalizeGraphComponents(parsed.graphComponents);
+
+      if (restoredGraphComponents) {
+        graphComponents = restoredGraphComponents;
+      }
+
+      if (isRuntimeOverheadId(parsed.runtimeOverhead)) {
+        runtimeOverhead = parsed.runtimeOverhead;
+      }
+    } catch {
+      localStorage.removeItem(settingsKey);
+    }
   }
 
   async function loadProcessedModels() {
@@ -527,6 +625,7 @@
   }
 
   onMount(() => {
+    loadSettings();
     void loadProcessedModels();
   });
 </script>
@@ -609,11 +708,24 @@
       <div class="config-grid">
         <label title="Maximum token context to evaluate on the graph.">
           <span title="Maximum token context to evaluate on the graph.">Context Size</span>
-          <input min="1" step="1024" title="Maximum token context to evaluate on the graph." type="number" bind:value={sequenceLength} />
+          <input
+            min="1"
+            step="1024"
+            title="Maximum token context to evaluate on the graph."
+            type="number"
+            value={sequenceLength}
+            oninput={(event) => updateSequenceLength((event.currentTarget as HTMLInputElement).valueAsNumber)}
+          />
         </label>
         <label title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">
           <span title="Batch count multiplies KV cache memory because each sequence keeps its own cache.">Batches</span>
-          <input min="1" title="Batch count multiplies KV cache memory because each sequence keeps its own cache." type="number" bind:value={batchSize} />
+          <input
+            min="1"
+            title="Batch count multiplies KV cache memory because each sequence keeps its own cache."
+            type="number"
+            value={batchSize}
+            oninput={(event) => updateBatchSize((event.currentTarget as HTMLInputElement).valueAsNumber)}
+          />
         </label>
         <div class="field">
           <span title="Precision used for KV cache tensors.">KV bits</span>
@@ -625,6 +737,7 @@
                 type="button"
                 onclick={() => {
                   precision = option.id;
+                  saveSettings();
                 }}
               >
                 {option.label}
@@ -642,6 +755,7 @@
                 type="button"
                 onclick={() => {
                   weightPrecision = option.id;
+                  saveSettings();
                 }}
               >
                 {option.label}
@@ -670,6 +784,7 @@
                 type="button"
                 onclick={() => {
                   runtimeOverhead = option.id;
+                  saveSettings();
                 }}
               >
                 {option.label}
