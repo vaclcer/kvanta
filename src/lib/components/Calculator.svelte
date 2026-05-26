@@ -778,7 +778,7 @@
   <div class="workspace">
     <header class="brand">
       <h1 aria-label="kvanta"><span>k</span><span>v</span><span>a</span><span>n</span><span>t</span><span>a</span></h1>
-      <p>kvanta calculates LLM KV-cache and model-weight VRAM.</p>
+      <p>KVANTA estimates the LLM KV-cache memory used by vLLM</p>
     </header>
 
     <section class="picker-panel">
@@ -1022,17 +1022,13 @@
               <span>raw VRAM</span>
               <strong title="Decimal GB / binary GiB">{formatBytesBoth(totalGpuVramBytes)}</strong>
             </div>
-            <div title="vLLM tensor parallel fit is limited by the smallest selected GPU times GPU count times gpu_memory_utilization.">
-              <span>vLLM VRAM</span>
-              <strong title="Decimal GB / binary GiB">{formatBytesBoth(vllmVramBytes)}</strong>
-            </div>
             <div title="Directly maps to vLLM --gpu-memory-utilization.">
               <span>vLLM %</span>
               <strong>{(vllmGpuMemoryUtilization * 100).toFixed(0)}%</strong>
             </div>
-            <div>
-              <span>context</span>
-              <strong>{formatInteger(sequenceLength)}</strong>
+            <div title="vLLM tensor parallel fit is limited by the smallest selected GPU times GPU count times gpu_memory_utilization.">
+              <span>vLLM VRAM</span>
+              <strong title="Decimal GB / binary GiB">{formatBytesBoth(vllmVramBytes)}</strong>
             </div>
           </div>
 
